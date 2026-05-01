@@ -6,7 +6,7 @@ seed: 42
 
 model:
   name: unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit
-  max_seq_length: 2048
+  max_seq_length: 4096           # bumped from 2048 — Day 1 measured median content = 1954 tokens
   load_in_4bit: true
   chat_template: qwen-2.5
 
