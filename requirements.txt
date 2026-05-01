@@ -1,0 +1,34 @@
+# Medical Reasoning LLM — Pinned dependencies (April 2026)
+# Train/eval reproducibility relies on these versions.
+
+# --- Core training stack ---
+unsloth==2025.4.7
+transformers==4.49.0
+trl==0.15.2
+peft==0.14.0
+datasets==3.2.0
+accelerate==1.3.0
+bitsandbytes==0.45.2
+
+# --- Experiment tracking ---
+wandb==0.19.4
+
+# --- Evaluation ---
+evaluate==0.4.3
+rouge-score==0.1.2
+sacrebleu==2.4.3
+bert-score==0.3.13
+sentence-transformers==3.4.1
+
+# --- LLM-as-judge clients ---
+openai==1.61.1            # works for Groq via base_url
+google-genai==0.7.0       # used only if Gemini becomes a third judge
+
+# --- General ---
+pandas==2.2.3
+numpy==1.26.4
+PyYAML==6.0.2
+tqdm==4.67.1
+
+# --- Test framework ---
+pytest==8.3.4

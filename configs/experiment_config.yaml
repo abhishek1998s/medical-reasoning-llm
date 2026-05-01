@@ -1,0 +1,89 @@
+# configs/experiment_config.yaml
+# Single source of truth for the medical-reasoning fine-tuning experiment.
+# DO NOT change values per-track — only the formatter ID changes.
+
+seed: 42
+
+model:
+  name: unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit
+  max_seq_length: 2048
+  load_in_4bit: true
+  chat_template: qwen-2.5
+
+dataset:
+  name: OpenMed/Medical-Reasoning-SFT-GPT-OSS-120B-V2
+  split: train
+  shuffle_seed: 42
+  num_train: 3000
+  num_val: 100
+  num_test: 200
+  split_order: shuffle_then_split_then_format
+  short_cot_max_tokens: 150
+  short_cot_truncate_at: sentence_boundary
+
+training:
+  epochs: 1.0
+  learning_rate: 2.0e-4
+  lr_scheduler_type: cosine
+  warmup_ratio: 0.03
+  weight_decay: 0.01
+  optim: adamw_8bit
+  per_device_train_batch_size: 2
+  gradient_accumulation_steps: 8
+  effective_batch_size: 16
+  gradient_checkpointing: unsloth
+  eval_strategy: steps
+  eval_steps: 50
+  save_strategy: steps
+  save_steps: 50
+  save_total_limit: 2
+  logging_steps: 10
+  packing: false
+  assistant_only_loss: true
+
+lora:
+  r: 16
+  alpha: 16
+  dropout: 0.05
+  bias: none
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+  use_rslora: false
+
+inference:
+  temperature: 0.0
+  do_sample: false
+  max_new_tokens:
+    track_A: 400
+    track_B: 400
+  repetition_penalty: 1.0
+  batch_size: 1
+  warmup_runs: 3
+  log_finish_reason: true
+  log_truncated_flag: true
+
+outputs:
+  save_adapters_only: true
+  push_to_hub: true
+  private_hub_repo: true
+
+logging:
+  report_to: wandb
+  fallback_report_to: none
+  save_local_json_log: true
+  wandb_project: medical-reasoning-sft
+  wandb_runs:
+    trackA: trackA-v0
+    trackB: trackB-v0
+
+hub:
+  username: abhishek1998s          # set automatically from GitHub username; verify HF username matches
+  repos:
+    trackA: qwen25-1.5b-medreason-trackA-v0
+    trackB: qwen25-1.5b-medreason-trackB-v0

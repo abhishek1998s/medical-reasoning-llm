@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Outputs (large files, model adapters, eval CSVs)
+# Use /* not / so the un-ignore for .gitkeep takes effect.
+outputs/*
+!outputs/.gitkeep
+
+# Secrets and env
+.env
+*.key
+.kaggle/
+.huggingface/
+
+# Claude Code per-machine settings
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.idea/
+.vscode/
+*.swp
