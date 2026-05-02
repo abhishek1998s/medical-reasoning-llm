@@ -101,15 +101,20 @@ Idempotent clone of the project repo. The `if not os.path.exists` guard means a 
 
 `git pull` if exists, so re-running picks up new commits without manual cleanup."""))
 
-cells.append(code("""# Install pinned versions of the GPU stack.
-# These EXACT versions worked on Day 1. Without pinning, pip's resolver
-# can pick a newer Unsloth + older Transformers combo that breaks with
-# `ImportError: cannot import name 'is_torch_neuron_available'`.
+cells.append(code("""# Clear any stale Unsloth compiled cache from a previous Kaggle session.
+# Unsloth caches per-PEFT-API compiled wrappers; if PEFT's API changes
+# between sessions, the cached compile is invalid and you get cryptic
+# errors like "dispatch_bnb_8bit() missing 1 required positional argument".
+!rm -rf /kaggle/working/unsloth_compiled_cache
+
+# Install the GPU stack. We pin transformers, trl, bitsandbytes, accelerate,
+# datasets, and wandb — those are stable APIs we depend on. We do NOT pin
+# unsloth or peft: Unsloth pins its own peft requirement internally, and
+# pinning peft externally causes API mismatches with Unsloth's compiled cache.
 !pip install -q --upgrade \\
-    unsloth==2026.4.8 \\
+    unsloth \\
     transformers==5.5.0 \\
     trl==0.24.0 \\
-    peft==0.19.1 \\
     bitsandbytes==0.49.2 \\
     accelerate==1.13.0 \\
     datasets==4.3.0 \\
@@ -117,15 +122,25 @@ cells.append(code("""# Install pinned versions of the GPU stack.
 
 cells.append(md("""**What this does**
 
-Pip-installs the *exact* version combination that worked on Day 1. The `--upgrade` flag tells pip to replace whatever Kaggle preinstalled (which may be older or newer); `==X.Y.Z` pins remove resolver guesswork.
+Two steps:
 
-**Why pin everything**
+1. **Wipes the Unsloth compiled cache** (`/kaggle/working/unsloth_compiled_cache`). Unsloth generates JIT-compiled wrappers for SFTTrainer / model layers per PEFT-API version. If PEFT changes minor version between sessions (e.g., 0.19.1 → 0.19.2 with a `dispatch_bnb_8bit` signature tweak), the cached compile becomes invalid and you get cryptic errors like:
+   ```
+   TypeError: dispatch_bnb_8bit() missing 1 required positional argument: 'config'
+   ```
+   Removing the cache forces Unsloth to recompile against whatever PEFT version actually got installed.
 
-Day 1 trap: `pip install unsloth transformers …` (no versions) gave us Unsloth 2026.4.8 + Transformers 4.x — which crashed because Unsloth needs a function only present in Transformers 5.x. Pinning prevents that drift.
+2. **Installs a curated set of pins.** We pin transformers / trl / bitsandbytes / accelerate / datasets / wandb (stable-API libs we directly depend on) but leave **unsloth and peft unpinned**. Unsloth declares its own PEFT version in its package metadata; pinning peft externally is what caused Day-2's `dispatch_bnb_8bit` crash.
+
+**Why this is the right balance**
+
+- Pinning Transformers protects against API breaks (5.5 vs 5.10 etc.).
+- Letting pip resolve Unsloth + PEFT together means they always agree on the wrapper protocol.
+- bitsandbytes 0.49.2 is the version with CUDA 12.8 support that worked on Day 1.
 
 **What the output tells you**
 
-Lots of pip noise. The wall of dependency-conflict warnings (about `cesium`, `bigframes`, `kaggle-environments` etc.) is *expected* — those are Kaggle's preinstalled libs that we don't use. The line that matters is at the very end: should say `Successfully installed unsloth-2026.4.8 transformers-5.5.0 …`. Total install time: ~3-4 min.
+Lots of pip noise. The wall of dependency-conflict warnings (about `cesium`, `bigframes`, `kaggle-environments` etc.) is *expected* — those are Kaggle's preinstalled libs that we don't use. The line that matters is at the very end: should say `Successfully installed unsloth-… transformers-5.5.0 …`. Total install time: ~3-4 min.
 
 **What could be improved**
 
