@@ -189,9 +189,11 @@ Validate the HF token has *write* scope: `from huggingface_hub import HfApi; api
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 2 — load + split + format
 # ─────────────────────────────────────────────────────────────────────────────
-cells.append(md("""## 2. Load, split, and format the dataset
+cells.append(md("""## 2. Load, split, format, and render the dataset
 
-We load OpenMed, do `shuffle_filter_split` (3000 train + 100 val + 200 test, length-filtered to fit in 4096 tokens), and apply Track B's answer-only formatter. The dataset stays in **conversational format** (rows with `messages`) — TRL's SFTTrainer applies the chat template internally during collation when `assistant_only_loss=True`.
+We load OpenMed, do `shuffle_filter_split` (3000 train + 100 val + 200 test, length-filtered to fit in 4096 tokens), apply Track B's answer-only formatter, then render via the chat template into a `text` field.
+
+> **Why pre-render to text?** Unsloth's compiled `SFTTrainer` wrapper requires either a `text` field or a `formatting_func` — it doesn't auto-handle conversational data the way vanilla TRL does. We'll handle the assistant-only-loss masking via Unsloth's `train_on_responses_only` after building the trainer (see Section 5).
 
 > **Same indices on Day 3.** `shuffle_seed=42` is fixed in `configs/experiment_config.yaml`. Notebook 03 (Track A) will use the same seed → identical rows in train/val/test → fair comparison."""))
 
@@ -276,38 +278,11 @@ val_b   = val_ds.map(format_for_track_b,   load_from_cache_file=False)
 # Test split is NOT formatted here — we evaluate raw test rows on Day 5
 # and compare predictions against gold `content`.
 
-# Verify the structure is still conversational (required by SFTTrainer
-# when assistant_only_loss=True).
-assert train_b.column_names == ["messages"], \\
-    f"BAD: train_b has columns {train_b.column_names}; expected ['messages']"
-assert val_b.column_names == ["messages"], \\
-    f"BAD: val_b has columns {val_b.column_names}"
-
-print("train_b columns:", train_b.column_names)
-print("val_b columns:  ", val_b.column_names)
-print("first row roles:", [m["role"] for m in train_b[0]["messages"]])
-print()
-# Visual sanity (note: some rows have a system message too, so [0] may be system)
-print("messages[0]:", train_b[0]["messages"][0]["content"][:200])
-print("messages[1]:", train_b[0]["messages"][1]["content"][:200])
-if len(train_b[0]["messages"]) > 2:
-    print("messages[2]:", train_b[0]["messages"][2]["content"][:200])"""))
+print("train_b columns (after format):", train_b.column_names)"""))
 
 cells.append(md("""**What this does**
 
-`Dataset.map(fn)` applies `format_for_track_b` to each row and returns a new Dataset. The function drops `reasoning_content` and keeps only the final `content`. The two `assert` statements verify the result is still in conversational format (rows with `messages` field) — required by SFTTrainer's `assistant_only_loss=True` mode.
-
-**Why we don't pre-render the chat template ourselves**
-
-Earlier versions of this notebook had an extra cell that called `tokenizer.apply_chat_template(...)` to produce a single `text` field. **That broke training** because:
-- TRL's `SFTTrainer` with `assistant_only_loss=True` needs the `messages` structure to find the `{% generation %}` markers in the chat template — those markers tell it which tokens are *assistant* (supervised) and which are *user/system* (label `-100`).
-- Pre-rendering to `text` flattens the structure and loses those markers.
-
-**TRL applies the chat template internally** when:
-1. The dataset is conversational (rows with `messages`), and
-2. The tokenizer has a chat template attached (we'll do that in cell 19 via `get_chat_template`).
-
-We don't need to render manually. SFTTrainer does it during data collation.
+`Dataset.map(fn)` applies `format_for_track_b` to each row. The function drops `reasoning_content` and keeps only the final `content`. After this step, rows are still in conversational format (`messages` field). We'll render to text in the next cell.
 
 **Why we don't format the test split here**
 
@@ -315,11 +290,58 @@ The test split is for **evaluating predictions**, not for training. On Day 5, we
 
 **What the output tells you**
 
-`train_b columns: ['messages']` and `val_b columns: ['messages']` — both still conversational. `first row roles` should be `['user', 'assistant']` or `['system', 'user', 'assistant']` depending on the row. The `messages[N]` previews let you visually confirm the structure.
+`train_b columns (after format): ['messages']` — still conversational, ready for the render step.
 
 **What could be improved**
 
-Add a third assert checking each message dict has `role` and `content` keys — defensive against any future formatter regression."""))
+Add an assert checking each message dict has `role` and `content` keys — defensive against any future formatter regression."""))
+
+cells.append(code("""# Render messages -> single "text" string per row using the chat template.
+# Unsloth's SFTTrainer wrapper requires this — it can't consume conversational
+# data directly. We'll handle assistant-only masking via train_on_responses_only
+# (see Section 5) instead of TRL's assistant_only_loss=True.
+from unsloth.chat_templates import get_chat_template
+
+# Attach the qwen-2.5 chat template to our tokenizer (idempotent).
+tok = get_chat_template(tok, chat_template=cfg["model"]["chat_template"])
+
+def render(example):
+    return {"text": tok.apply_chat_template(
+        example["messages"], tokenize=False, add_generation_prompt=False,
+    )}
+
+train_b = train_b.map(render, remove_columns=train_b.column_names,
+                       load_from_cache_file=False)
+val_b   = val_b.map(render,   remove_columns=val_b.column_names,
+                       load_from_cache_file=False)
+
+assert train_b.column_names == ["text"], \\
+    f"BAD: expected ['text'], got {train_b.column_names}"
+
+print("train_b columns (after render):", train_b.column_names)
+print()
+print("First training text (first 800 chars):")
+print(train_b[0]["text"][:800])"""))
+
+cells.append(md("""**What this does**
+
+Replaces each row's `messages` list with a single `text` string containing the full chat-templated conversation: `<|im_start|>system\\n…<|im_end|><|im_start|>user\\n…<|im_end|><|im_start|>assistant\\n…<|im_end|>`. Removes the `messages` column afterwards so the dataset has only `text`.
+
+**Why `add_generation_prompt=False`**
+
+We're rendering *complete* training examples (assistant turn included). Setting it to `True` would append a trailing `<|im_start|>assistant\\n` with no closing tag — that's the *inference-time* form for "your turn, model." For training, we want the closed assistant turn so the model learns to produce `<|im_end|>` as a stop signal.
+
+**Why the explicit assert**
+
+This dataset is now in *flat-text* mode. Day 5 inference notebooks will consume `messages` directly (different mode). The assert catches any accidental skip of this step.
+
+**What the output tells you**
+
+`['text']` only — no `messages` left. The 800-char preview should show the full Qwen format with system + user + assistant turns clearly visible.
+
+**What could be improved**
+
+Tokenize `text` and check the per-row token lengths — if any exceed 4096, our 3500-token filter wasn't conservative enough. Adding `print(np.percentile([len(tok.encode(t)) for t in train_b["text"][:200]], [50,95,99]))` would surface that."""))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 3 — model + LoRA
@@ -416,18 +438,14 @@ This is the spec correction-round-2 item #1. With `assistant_only_loss=True`, SF
 If user/system tokens leak into the loss, the model would learn to *reproduce the user's question*, which is a) waste of capacity, b) information leakage in evaluation."""))
 
 cells.append(code("""# Verify that, for one example, user/system tokens get label=-100.
-# train_b is in conversational format (messages); we apply the chat
-# template manually here just for this sanity check — TRL does this
-# automatically during training.
+# Train_b is in flat-text mode — `train_on_responses_only` (called in
+# Section 5 after the trainer is built) will mask everything before the
+# response_part marker. We replicate that masking here just for this
+# sanity check.
 import numpy as np
 
 example = train_b[0]
-
-# Render this single example via the same chat template SFTTrainer will use.
-text = tokenizer.apply_chat_template(
-    example["messages"], tokenize=False, add_generation_prompt=False,
-)
-ids = tokenizer(text, return_tensors="pt", truncation=True,
+ids = tokenizer(example["text"], return_tensors="pt", truncation=True,
                 max_length=cfg["model"]["max_seq_length"])
 input_ids = ids["input_ids"][0]
 
@@ -525,10 +543,13 @@ sft_config = SFTConfig(
     logging_steps               = cfg["training"]["logging_steps"],
     seed                        = cfg["seed"],
     max_length                  = cfg["model"]["max_seq_length"],
-    # NOTE: no dataset_text_field — TRL auto-detects conversational mode
-    # from the `messages` column and applies the chat template internally.
+    dataset_text_field          = "text",     # we pre-rendered to text in Section 2
     packing                     = cfg["training"]["packing"],
-    assistant_only_loss         = cfg["training"]["assistant_only_loss"],
+    # We override the YAML's assistant_only_loss=True to False here because
+    # Unsloth's compiled SFTTrainer wrapper conflicts with TRL's native
+    # assistant_only_loss path. Instead we use Unsloth's own
+    # train_on_responses_only(...) call after building the trainer (next cell).
+    assistant_only_loss         = False,
     report_to                   = "wandb",
 )
 print("SFTConfig built.")"""))
@@ -575,21 +596,48 @@ print("Trainer ready.")"""))
 
 cells.append(md("""**What this does**
 
-Wraps the model + tokenizer + datasets + config into a Trainer. SFTTrainer extends HF's Trainer with SFT-specific bits like assistant-only loss masking. From here, `trainer.train()` runs the full SFT loop.
-
-**What's happening under the hood**
-
-1. SFTTrainer registers a data collator that pads each batch to the longest sequence in the batch (left-padding for fp16 efficiency; the chat template's special tokens stay in place).
-2. With `assistant_only_loss=True`, the collator inserts `-100` labels for non-assistant tokens via the chat template's `{% generation %}` markers (Qwen2.5's official template supports this).
-3. It hooks W&B for logging.
+Wraps the model + tokenizer + datasets + config into a Trainer. From here, `trainer.train()` runs the full SFT loop. At this point the trainer treats *every* token (user, system, assistant) as supervised — we mask user/system tokens in the next cell.
 
 **What the output tells you**
 
-"Trainer ready." If it prints warnings about *missing* generation markers, that's important — it means assistant_only_loss might silently fall back to "loss on all tokens." Investigate before training.
+"Trainer ready." Any warnings about deprecated args are harmless — TRL is moving APIs around in v0.24.
 
 **What could be improved**
 
 Run `trainer.evaluate()` before training to get a *baseline* eval_loss — useful to compare against post-training eval_loss to confirm learning happened."""))
+
+cells.append(code("""# Mask user/system tokens so loss is computed only on assistant tokens.
+# This is Unsloth's equivalent of TRL's assistant_only_loss=True.
+from unsloth.chat_templates import train_on_responses_only
+
+trainer = train_on_responses_only(
+    trainer,
+    instruction_part = "<|im_start|>user\\n",
+    response_part    = "<|im_start|>assistant\\n",
+)
+print("Trainer wrapped for response-only loss.")"""))
+
+cells.append(md("""**What this does**
+
+Replaces the trainer's data collator with one that scans each batch's token IDs for the `response_part` marker (`<|im_start|>assistant\\n`) and sets `labels[i] = -100` for every token *before* that marker. After this, when `trainer.train()` runs, the cross-entropy loss is computed *only* on assistant tokens.
+
+**Why we need this instead of `assistant_only_loss=True`**
+
+Unsloth's compiled `SFTTrainer` wrapper isn't compatible with TRL's native `assistant_only_loss=True` path — the wrapper requires a `text` field (or `formatting_func`), but `assistant_only_loss=True` requires the conversational `messages` format. Unsloth provides `train_on_responses_only(...)` as their drop-in replacement that achieves the same effect on flat-text data.
+
+**Why these specific marker strings**
+
+Qwen2.5's chat template renders each turn as `<|im_start|>{role}\\n…<|im_end|>`. We tell `train_on_responses_only` that user turns start with `<|im_start|>user\\n` and assistant turns start with `<|im_start|>assistant\\n`. The function then masks everything before each `<|im_start|>assistant\\n` occurrence — so the model only ever computes loss on the assistant's tokens.
+
+If you swap base models (say to Llama-3.x), update these markers to that model's template (`<|start_header_id|>user<|end_header_id|>` etc.).
+
+**What the output tells you**
+
+"Trainer wrapped for response-only loss." Nothing else.
+
+**What could be improved**
+
+Verify masking on one batch: pull a batch from `trainer.get_train_dataloader()`, inspect `batch["labels"]`, count the `-100` entries vs assistant-token entries. If the ratio is ~80% supervised, all good (matches Section 4's sanity check). If it's 100% supervised, masking didn't apply."""))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 6 — train
