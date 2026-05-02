@@ -1,12 +1,23 @@
 # configs/experiment_config.yaml
 # Single source of truth for the medical-reasoning fine-tuning experiment.
-# DO NOT change values per-track — only the formatter ID changes.
+# DO NOT change values per-track. Only the formatter ID changes.
+#
+# ============================================================
+# CURRENT MODE: DRY RUN (fast smoke test, ~10 min on Kaggle T4)
+# ============================================================
+# This validates cells 39-49 (eval, save, hub push, smoke test)
+# which never executed in the 109-min Day-2 run because it
+# crashed at eval.
+#
+# When the dry run passes end-to-end, switch back to FULL PATH B
+# by swapping every value marked  # FULL: ...  to its full value.
+# ============================================================
 
 seed: 42
 
 model:
   name: unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit
-  max_seq_length: 4096           # bumped from 2048 — Day 1 measured median content = 1954 tokens
+  max_seq_length: 2048             # FULL: 4096   (Day 1 measured median content = 1954 tokens)
   load_in_4bit: true
   chat_template: qwen-2.5
 
@@ -14,9 +25,9 @@ dataset:
   name: OpenMed/Medical-Reasoning-SFT-GPT-OSS-120B-V2
   split: train
   shuffle_seed: 42
-  num_train: 3000
-  num_val: 100
-  num_test: 200
+  num_train: 100                   # FULL: 3000
+  num_val: 10                      # FULL: 100
+  num_test: 5                      # FULL: 200
   split_order: shuffle_then_split_then_format
   short_cot_max_tokens: 150
   short_cot_truncate_at: sentence_boundary
@@ -29,17 +40,19 @@ training:
   weight_decay: 0.01
   optim: adamw_8bit
   per_device_train_batch_size: 2
-  gradient_accumulation_steps: 8
-  effective_batch_size: 16
+  gradient_accumulation_steps: 2   # FULL: 8     (dry run keeps batch tiny so we get more steps per epoch)
+  effective_batch_size: 4          # FULL: 16    (= per_device × gradient_accumulation)
   gradient_checkpointing: unsloth
   eval_strategy: steps
-  eval_steps: 50
+  eval_steps: 10                   # FULL: 50    (dry run: ~2-3 evals across the run)
   save_strategy: steps
-  save_steps: 50
+  save_steps: 25                   # FULL: 50
   save_total_limit: 2
-  logging_steps: 10
+  logging_steps: 2                 # FULL: 10    (dry run: see progress every 2 steps)
   packing: false
-  assistant_only_loss: true
+  assistant_only_loss: true        # documents intent; we override to False in SFTConfig
+                                   # (Unsloth's wrapper conflicts with TRL's native path —
+                                   # we use train_on_responses_only instead, see Section 5)
 
 lora:
   r: 16
@@ -79,11 +92,11 @@ logging:
   save_local_json_log: true
   wandb_project: medical-reasoning-sft
   wandb_runs:
-    trackA: trackA-v0
-    trackB: trackB-v0
+    trackA: trackA-v0-dryrun       # FULL: trackA-v0
+    trackB: trackB-v0-dryrun       # FULL: trackB-v0
 
 hub:
   username: abhishek1998s          # set automatically from GitHub username; verify HF username matches
   repos:
-    trackA: qwen25-1.5b-medreason-trackA-v0
-    trackB: qwen25-1.5b-medreason-trackB-v0
+    trackA: qwen25-1.5b-medreason-trackA-dryrun   # FULL: qwen25-1.5b-medreason-trackA-v0
+    trackB: qwen25-1.5b-medreason-trackB-dryrun   # FULL: qwen25-1.5b-medreason-trackB-v0
