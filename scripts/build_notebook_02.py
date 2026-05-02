@@ -63,7 +63,18 @@ cells.append(md("""## 1. Bootstrap (clone, verify, secrets)
 
 Same pattern as Notebook 01: clone the repo, verify the GPU stack imports cleanly, load the three secrets, log into HF. If any verify fails, restart the kernel and re-run."""))
 
-cells.append(code(f"""# Clone the project so we can `import src.data_formatting`, `src.splits`, etc.
+cells.append(code(f"""# Suppress noisy deprecation warnings from transformers/trl/unsloth.
+# These are harmless (libraries are mid-migration to transformers 5.x APIs)
+# but they pollute training-cell output. Comment out if you're debugging.
+import warnings
+warnings.filterwarnings("ignore", message=".*AttentionMaskConverter.*")
+warnings.filterwarnings("ignore", message=".*use_return_dict.*")
+warnings.filterwarnings("ignore", message=".*max_new_tokens.*max_length.*")
+warnings.filterwarnings("ignore", message=".*has new PAD/BOS/EOS tokens.*")
+warnings.filterwarnings("ignore", message=".*Will smartly offload gradients.*")
+warnings.filterwarnings("ignore", category=FutureWarning, module="transformers")
+
+# Clone the project so we can `import src.data_formatting`, `src.splits`, etc.
 import subprocess, sys, os
 
 REPO_URL = "{REPO_URL}"
@@ -697,27 +708,47 @@ Final `train_loss` should be 0.7–1.1. The exact value matters less than the *t
 - Include `train_stats.metrics` JSON dump in `training_meta.json` for the report.
 - Plot the loss curve directly in the notebook (`matplotlib`) so you don't need W&B to view it later."""))
 
-cells.append(code("""# Final eval pass — compare to first eval to confirm learning.
-final_eval = trainer.evaluate()
-print("final eval_loss:", round(final_eval["eval_loss"], 4))"""))
+cells.append(code("""# Pull the final eval_loss from trainer.state.log_history.
+# We do NOT call trainer.evaluate() here because there's a known bug in
+# transformers v5 where the notebook progress-bar callback fails after
+# train() returns:  RuntimeError: on_train_begin must be called before
+# on_evaluate.  Since SFTTrainer already ran eval at every 50 steps
+# during training, we just read the last recorded eval_loss.
+
+eval_entries = [e for e in trainer.state.log_history if "eval_loss" in e]
+if eval_entries:
+    final_eval = eval_entries[-1]   # last in-training eval is the post-final-step one
+    print("final eval_loss:    ", round(final_eval["eval_loss"], 4))
+    print("final eval_runtime: ", round(final_eval.get("eval_runtime", 0.0), 1), "s")
+    print("step at last eval:  ", final_eval.get("step"))
+else:
+    final_eval = {"eval_loss": None}
+    print("[warning] no eval entries in log_history — eval_strategy may have been off")"""))
 
 cells.append(md("""**What this does**
 
-Runs evaluation on the 100 val rows one more time after training is complete. Returns a dict with `eval_loss`, `eval_runtime`, `eval_samples_per_second`.
+Reads the last `eval_loss` recorded in `trainer.state.log_history` (which is filled in during training at every `eval_steps` interval — 50 in our config). Avoids calling `trainer.evaluate()` after `train()` because of a known callback bug in `transformers` 5.5.0:
 
-**Why a final explicit eval**
+```
+RuntimeError: on_train_begin must be called before on_evaluate
+```
 
-The trainer already evaluated at step 50/100/150 during training. The "final" call after `train()` returns gives us the *post-final-step* eval loss, which is the number we'll report.
+The bug: when `train()` finishes, the notebook-progress callback resets its internal state. The next `evaluate()` call then triggers the callback's `on_evaluate` hook, which expects `on_train_begin` to have run — but training already ended.
+
+**Why this is fine**
+
+SFTTrainer already evaluated at steps 50, 100, 150, and the final step (188). Each of those evaluations is logged in `trainer.state.log_history`. The *last* entry is the post-final-step eval — exactly the number we want. Re-running evaluate would just compute the same thing.
 
 **What the output tells you**
 
 A reasonable final `eval_loss` for Track B is **~0.95–1.10**. If it's much higher than `train_loss`, the model is overfitting to train. If it's much lower, you might have data leakage between train/val (shouldn't happen since `shuffle_filter_split` guarantees disjoint indices).
 
-For our 3000-train + 100-val setup, we expect `eval_loss` to be slightly *higher* than `train_loss` (e.g., train=0.9, eval=1.0) — that's a healthy generalization gap.
+For our 3000-train + 100-val setup, we expect `eval_loss` to be slightly *higher* than `train_loss` — that's a healthy generalization gap.
 
 **What could be improved**
 
-Compute `perplexity = exp(eval_loss)` — it's more interpretable than raw cross-entropy ("the model is on average X-way confused per token")."""))
+- Plot `eval_loss` over `step` from `log_history` to visualise the learning curve directly in the notebook.
+- Compute `perplexity = exp(eval_loss)` — more interpretable than raw cross-entropy ("the model is on average X-way confused per token")."""))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 7 — save + push
