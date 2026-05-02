@@ -90,6 +90,37 @@ Idempotent clone of the project repo. The `if not os.path.exists` guard means a 
 
 `git pull` if exists, so re-running picks up new commits without manual cleanup."""))
 
+cells.append(code("""# Install pinned versions of the GPU stack.
+# These EXACT versions worked on Day 1. Without pinning, pip's resolver
+# can pick a newer Unsloth + older Transformers combo that breaks with
+# `ImportError: cannot import name 'is_torch_neuron_available'`.
+!pip install -q --upgrade \\
+    unsloth==2026.4.8 \\
+    transformers==5.5.0 \\
+    trl==0.24.0 \\
+    peft==0.19.1 \\
+    bitsandbytes==0.49.2 \\
+    accelerate==1.13.0 \\
+    datasets==4.3.0 \\
+    wandb==0.19.4"""))
+
+cells.append(md("""**What this does**
+
+Pip-installs the *exact* version combination that worked on Day 1. The `--upgrade` flag tells pip to replace whatever Kaggle preinstalled (which may be older or newer); `==X.Y.Z` pins remove resolver guesswork.
+
+**Why pin everything**
+
+Day 1 trap: `pip install unsloth transformers …` (no versions) gave us Unsloth 2026.4.8 + Transformers 4.x — which crashed because Unsloth needs a function only present in Transformers 5.x. Pinning prevents that drift.
+
+**What the output tells you**
+
+Lots of pip noise. The wall of dependency-conflict warnings (about `cesium`, `bigframes`, `kaggle-environments` etc.) is *expected* — those are Kaggle's preinstalled libs that we don't use. The line that matters is at the very end: should say `Successfully installed unsloth-2026.4.8 transformers-5.5.0 …`. Total install time: ~3-4 min.
+
+**What could be improved**
+
+- **Conditional install**: only run if a verify-imports check fails first. Avoids the 3-4 min install on sessions where Kaggle's preinstalled stack happens to work.
+- **Sync versions to `requirements.txt`**: pip uses *these* pins, but `pytest tests/` on your laptop uses `requirements.txt` — single source of truth would be cleaner."""))
+
 cells.append(code("""# Verify the GPU stack imports cleanly. Versions go into training_meta.json later.
 import importlib
 
@@ -160,7 +191,7 @@ Validate the HF token has *write* scope: `from huggingface_hub import HfApi; api
 # ─────────────────────────────────────────────────────────────────────────────
 cells.append(md("""## 2. Load, split, and format the dataset
 
-We load OpenMed, do `shuffle_filter_split` (3000 train + 100 val + 200 test, length-filtered to fit in 4096 tokens), apply Track B's answer-only formatter, then render via the chat template.
+We load OpenMed, do `shuffle_filter_split` (3000 train + 100 val + 200 test, length-filtered to fit in 4096 tokens), and apply Track B's answer-only formatter. The dataset stays in **conversational format** (rows with `messages`) — TRL's SFTTrainer applies the chat template internally during collation when `assistant_only_loss=True`.
 
 > **Same indices on Day 3.** `shuffle_seed=42` is fixed in `configs/experiment_config.yaml`. Notebook 03 (Track A) will use the same seed → identical rows in train/val/test → fair comparison."""))
 
@@ -236,68 +267,59 @@ The chat template adds ~30 tokens of `<|im_start|>...<|im_end|>` overhead, plus 
 Save `test_ds` to disk now (`test_ds.save_to_disk("outputs/trackB/test_set")`) so Day-5 inference uses the *exact* same 200 rows."""))
 
 cells.append(code("""# Apply Track B formatter (drops reasoning_content, keeps content only).
+# load_from_cache_file=False forces a fresh map even if HF datasets has a
+# cached previous run (defensive — avoids surprises after kernel restarts).
 from src.data_formatting import format_for_track_b
 
-train_b = train_ds.map(format_for_track_b)
-val_b   = val_ds.map(format_for_track_b)
+train_b = train_ds.map(format_for_track_b, load_from_cache_file=False)
+val_b   = val_ds.map(format_for_track_b,   load_from_cache_file=False)
 # Test split is NOT formatted here — we evaluate raw test rows on Day 5
 # and compare predictions against gold `content`.
 
-print("First training example after Track B formatting:")
-print("user:", train_b[0]["messages"][0]["content"][:200])
-print("assistant:", train_b[0]["messages"][1]["content"][:300])"""))
+# Verify the structure is still conversational (required by SFTTrainer
+# when assistant_only_loss=True).
+assert train_b.column_names == ["messages"], \\
+    f"BAD: train_b has columns {train_b.column_names}; expected ['messages']"
+assert val_b.column_names == ["messages"], \\
+    f"BAD: val_b has columns {val_b.column_names}"
+
+print("train_b columns:", train_b.column_names)
+print("val_b columns:  ", val_b.column_names)
+print("first row roles:", [m["role"] for m in train_b[0]["messages"]])
+print()
+# Visual sanity (note: some rows have a system message too, so [0] may be system)
+print("messages[0]:", train_b[0]["messages"][0]["content"][:200])
+print("messages[1]:", train_b[0]["messages"][1]["content"][:200])
+if len(train_b[0]["messages"]) > 2:
+    print("messages[2]:", train_b[0]["messages"][2]["content"][:200])"""))
 
 cells.append(md("""**What this does**
 
-`Dataset.map(fn)` applies `format_for_track_b` to each row and returns a new Dataset. The function drops `reasoning_content` and keeps only the final `content`.
+`Dataset.map(fn)` applies `format_for_track_b` to each row and returns a new Dataset. The function drops `reasoning_content` and keeps only the final `content`. The two `assert` statements verify the result is still in conversational format (rows with `messages` field) — required by SFTTrainer's `assistant_only_loss=True` mode.
+
+**Why we don't pre-render the chat template ourselves**
+
+Earlier versions of this notebook had an extra cell that called `tokenizer.apply_chat_template(...)` to produce a single `text` field. **That broke training** because:
+- TRL's `SFTTrainer` with `assistant_only_loss=True` needs the `messages` structure to find the `{% generation %}` markers in the chat template — those markers tell it which tokens are *assistant* (supervised) and which are *user/system* (label `-100`).
+- Pre-rendering to `text` flattens the structure and loses those markers.
+
+**TRL applies the chat template internally** when:
+1. The dataset is conversational (rows with `messages`), and
+2. The tokenizer has a chat template attached (we'll do that in cell 19 via `get_chat_template`).
+
+We don't need to render manually. SFTTrainer does it during data collation.
 
 **Why we don't format the test split here**
 
-The test split is for **evaluating predictions**, not for training. On Day 5, we'll feed the raw user message to the trained model, get its prediction, and compare against the *original* gold `content`. If we formatter-applied here, we'd be comparing predictions against a ground truth that already had the rationale stripped — which is what we want for *Track B* eval, but Track A eval needs the original. Easier to keep test raw and apply per-track at eval time.
+The test split is for **evaluating predictions**, not for training. On Day 5, we'll feed the raw user message to the trained model, get its prediction, and compare against the *original* gold `content`.
 
 **What the output tells you**
 
-Visual sanity: the user message looks like a real medical question; the assistant message starts with the answer, no `Clinical rationale:` header. ✓
+`train_b columns: ['messages']` and `val_b columns: ['messages']` — both still conversational. `first row roles` should be `['user', 'assistant']` or `['system', 'user', 'assistant']` depending on the row. The `messages[N]` previews let you visually confirm the structure.
 
 **What could be improved**
 
-Print the `assistant_only_loss` boundary marker location too — useful when the chat template debugging gets weird."""))
-
-cells.append(code("""# Render the chat template -> single "text" string per row.
-from unsloth.chat_templates import get_chat_template
-
-tok = get_chat_template(tok, chat_template=cfg["model"]["chat_template"])
-
-def render(example):
-    return {"text": tok.apply_chat_template(
-        example["messages"], tokenize=False, add_generation_prompt=False,
-    )}
-
-train_b = train_b.map(render, remove_columns=train_b.column_names)
-val_b   = val_b.map(render,   remove_columns=val_b.column_names)
-
-print("First training text (first 800 chars):")
-print(train_b[0]["text"][:800])"""))
-
-cells.append(md("""**What this does**
-
-Replaces the Qwen tokenizer's default chat template with Unsloth's tested version, then applies it to every row. After this, each row has a single `"text"` field containing the full Qwen-formatted conversation: `<|im_start|>system\\n...<|im_end|><|im_start|>user\\n...<|im_end|><|im_start|>assistant\\n...<|im_end|>`.
-
-**Why `add_generation_prompt=False`**
-
-We're rendering *complete* training examples (assistant turn included). Setting it to `True` would append a trailing `<|im_start|>assistant\\n` with no closing tag — that's the *inference-time* form that says "your turn, model." For training, we want the closed assistant turn.
-
-**Why `remove_columns=...`**
-
-After `map`, we have BOTH the new `text` column AND the original `messages` column. SFTTrainer reads `text` and would choke on `messages`. Removing the old columns keeps the dataset minimal.
-
-**What the output tells you**
-
-You should see the full Qwen format with the user's medical question and an assistant turn that goes directly to the answer (no rationale).
-
-**What could be improved**
-
-Tokenize `text` and check the per-row token lengths — if any exceed 4096, our 3500-token filter wasn't conservative enough. A `print(np.percentile([len(tok.encode(t)) for t in train_b["text"][:200]], [50,95,99]))` would surface that."""))
+Add a third assert checking each message dict has `role` and `content` keys — defensive against any future formatter regression."""))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Section 3 — model + LoRA
@@ -495,7 +517,8 @@ sft_config = SFTConfig(
     logging_steps               = cfg["training"]["logging_steps"],
     seed                        = cfg["seed"],
     max_length                  = cfg["model"]["max_seq_length"],
-    dataset_text_field          = "text",
+    # NOTE: no dataset_text_field — TRL auto-detects conversational mode
+    # from the `messages` column and applies the chat template internally.
     packing                     = cfg["training"]["packing"],
     assistant_only_loss         = cfg["training"]["assistant_only_loss"],
     report_to                   = "wandb",
