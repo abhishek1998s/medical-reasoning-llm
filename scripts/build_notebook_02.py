@@ -416,16 +416,24 @@ This is the spec correction-round-2 item #1. With `assistant_only_loss=True`, SF
 If user/system tokens leak into the loss, the model would learn to *reproduce the user's question*, which is a) waste of capacity, b) information leakage in evaluation."""))
 
 cells.append(code("""# Verify that, for one example, user/system tokens get label=-100.
+# train_b is in conversational format (messages); we apply the chat
+# template manually here just for this sanity check — TRL does this
+# automatically during training.
 import numpy as np
 
 example = train_b[0]
-ids = tok(example["text"], return_tensors="pt", truncation=True,
-          max_length=cfg["model"]["max_seq_length"])
+
+# Render this single example via the same chat template SFTTrainer will use.
+text = tokenizer.apply_chat_template(
+    example["messages"], tokenize=False, add_generation_prompt=False,
+)
+ids = tokenizer(text, return_tensors="pt", truncation=True,
+                max_length=cfg["model"]["max_seq_length"])
 input_ids = ids["input_ids"][0]
 
 # Find the assistant turn boundary by locating "<|im_start|>assistant\\n".
 asst_marker = "<|im_start|>assistant\\n"
-asst_marker_ids = tok(asst_marker, add_special_tokens=False)["input_ids"]
+asst_marker_ids = tokenizer(asst_marker, add_special_tokens=False)["input_ids"]
 arr = input_ids.tolist()
 
 def find_subseq(needle, hay):
