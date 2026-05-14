@@ -101,3 +101,9 @@ hub:
   repos:
     trackA: qwen25-1.5b-medreason-trackA-dryrun   # FULL: qwen25-1.5b-medreason-trackA-v0
     trackB: qwen25-1.5b-medreason-trackB-dryrun   # FULL: qwen25-1.5b-medreason-trackB-v0
+
+judge:
+  consensus_mode: true              # true = call every available judge per row (Cerebras + Groq + Gemini)
+                                    # and aggregate. false = single-judge fallback chain (Cerebras -> Groq -> Gemini).
+                                    # Consensus produces lower-variance scores at the cost of ~3x API calls;
+                                    # use it for the report-quality final run.

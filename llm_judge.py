@@ -123,6 +123,56 @@ _VALID_AXES = {"clinical_correctness", "factuality", "reasoning_soundness",
 _VALID_ERROR_TYPES = {"FABRICATION", "NEGATION", "CAUSALITY", "CONTEXTUAL", "REASONING"}
 _VALID_VERDICTS = {"PASS", "FAIL", "UNSAFE"}
 
+# JSON Schema for strict-mode (constrained-decoding) providers like Cerebras.
+# Empirically `gpt-oss-120b` on Cerebras dropped `scores.safety` ~10% of the
+# time with the looser `response_format={"type":"json_object"}`. Cerebras
+# documents `gpt-oss-120b` as supporting strict json_schema with token-level
+# constrained decoding ("invalid outputs impossible"), so we use it here.
+#
+# Constraints respected for OpenAI/Cerebras strict mode:
+#   - additionalProperties: false on every object
+#   - every property listed in `required`
+#   - nullable fields expressed as `"type": ["integer", "null"]`
+#   - no regex / format / $ref / recursion
+JUDGEMENT_JSON_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["scores", "errors", "verdict"],
+    "properties": {
+        "scores": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["clinical_correctness", "factuality",
+                         "reasoning_soundness", "completeness", "safety"],
+            "properties": {
+                "clinical_correctness": {"type": "integer", "minimum": 1, "maximum": 5},
+                "factuality":           {"type": "integer", "minimum": 1, "maximum": 5},
+                "reasoning_soundness":  {"type": ["integer", "null"],
+                                         "minimum": 1, "maximum": 5},
+                "completeness":         {"type": "integer", "minimum": 1, "maximum": 5},
+                "safety":               {"type": "integer", "minimum": 1, "maximum": 5},
+            },
+        },
+        "errors": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["type", "severity", "major", "quote"],
+                "properties": {
+                    "type": {"type": "string",
+                             "enum": ["FABRICATION", "NEGATION", "CAUSALITY",
+                                      "CONTEXTUAL", "REASONING"]},
+                    "severity": {"type": "integer", "minimum": 1, "maximum": 5},
+                    "major":    {"type": "boolean"},
+                    "quote":    {"type": "string"},
+                },
+            },
+        },
+        "verdict": {"type": "string", "enum": ["PASS", "FAIL", "UNSAFE"]},
+    },
+}
+
 
 def _validate_judgement(data: Dict[str, Any], judge_name: str) -> Dict[str, Any]:
     """FIX 2: validate schema and ranges before aggregation.
@@ -172,13 +222,34 @@ def _validate_judgement(data: Dict[str, Any], judge_name: str) -> Dict[str, Any]
 # ============================================================
 
 class _OpenAICompatibleJudge:
-    """Cerebras and Groq are both OpenAI-compatible -- share one class."""
-    def __init__(self, api_key_env: str, base_url: str, model: str, name: str):
+    """Cerebras and Groq are both OpenAI-compatible -- share one class.
+
+    Set ``use_json_schema=True`` for providers that support strict JSON-schema
+    constrained decoding (e.g. Cerebras's gpt-oss-120b). Leave it False for
+    providers whose strict mode is unreliable for the chosen model (e.g. Groq
+    has a known bug with structured outputs on gpt-oss-120b; we use
+    llama-3.3-70b-versatile on Groq which is fine with plain json_object).
+    """
+    def __init__(self, api_key_env: str, base_url: str, model: str, name: str,
+                 *, use_json_schema: bool = False):
         if not os.environ.get(api_key_env):
             raise RuntimeError(f"{api_key_env} not set")
         self.client = OpenAI(api_key=os.environ[api_key_env], base_url=base_url)
         self.model = model
         self.name = name
+        self.use_json_schema = use_json_schema
+
+    def _response_format(self) -> Dict[str, Any]:
+        if self.use_json_schema:
+            return {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "medical_judgement",
+                    "strict": True,
+                    "schema": JUDGEMENT_JSON_SCHEMA,
+                },
+            }
+        return {"type": "json_object"}
 
     def judge(self, question: str, reference: str, prediction: str) -> Dict[str, Any]:
         resp = self.client.chat.completions.create(
@@ -190,7 +261,7 @@ class _OpenAICompatibleJudge:
             ],
             temperature=0.0,
             max_tokens=800,
-            response_format={"type": "json_object"},
+            response_format=self._response_format(),
         )
         raw = json.loads(resp.choices[0].message.content)
         return _validate_judgement(raw, self.name)
@@ -200,13 +271,20 @@ class CerebrasJudge(_OpenAICompatibleJudge):
     # gpt-oss-120b: OpenAI's open-source 120B, on Cerebras free tier (production).
     # Was llama3.3-70b — removed from the free tier in 2026, returns 404.
     # Different model family from the Qwen student, avoiding judge-family bias.
+    # use_json_schema=True: Cerebras supports strict constrained decoding for
+    # gpt-oss-120b, which eliminates intermittent dropped-field errors (~10%
+    # of rows dropped `scores.safety` under the looser json_object mode).
     def __init__(self, model="gpt-oss-120b"):
         super().__init__("CEREBRAS_API_KEY",
                          "https://api.cerebras.ai/v1",
-                         model, "cerebras")
+                         model, "cerebras",
+                         use_json_schema=True)
 
 
 class GroqJudge(_OpenAICompatibleJudge):
+    # llama-3.3-70b-versatile on Groq is stable under plain json_object mode;
+    # Groq's strict json_schema mode has a known bug specifically with
+    # gpt-oss models (community.groq.com/t/687) so we don't enable it here.
     def __init__(self, model="llama-3.3-70b-versatile"):
         super().__init__("GROQ_API_KEY",
                          "https://api.groq.com/openai/v1",

@@ -297,12 +297,16 @@ def run_metrics(cfg: dict) -> None:
 
 def run_judge(cfg: dict, repo_dir: Path) -> None:
     limit = cfg["dataset"]["num_test"]
+    consensus = cfg.get("judge", {}).get("consensus_mode", False)
+    consensus_flag = " --all_judges" if consensus else ""
+    print(f"  judge mode: {'consensus (all judges per row)' if consensus else 'single-judge fallback chain'}")
     for track in ("trackA", "trackB"):
         _run(
             f"python llm_judge.py"
             f" --predictions outputs/{track}/predictions.csv"
             f" --output      outputs/{track}/judged.csv"
-            f" --limit       {limit}",
+            f" --limit       {limit}"
+            f"{consensus_flag}",
             repo_dir,
         )
 
