@@ -58,7 +58,7 @@ training:
 lora:
   r: 16
   alpha: 16
-  dropout: 0.05
+  dropout: 0.0          # was 0.05; required for Unsloth's fast LoRA QKV/O/MLP kernels
   bias: none
   target_modules:
     - q_proj

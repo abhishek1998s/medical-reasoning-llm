@@ -119,6 +119,11 @@ def train(track: str, cfg: dict, repo_dir: Path, full: bool) -> None:
     cmd += f" --save_steps {cfg['training']['save_steps']}"
     cmd += f" --logging_steps {cfg['training']['logging_steps']}"
 
+    # Forward LoRA dropout (must be 0.0 to enable Unsloth's fast LoRA kernels)
+    # and warmup_ratio so train_sft.py builds an absolute warmup_steps.
+    cmd += f" --lora_dropout {cfg['lora']['dropout']}"
+    cmd += f" --warmup_ratio {cfg['training']['warmup_ratio']}"
+
     _run(cmd, repo_dir)
 
 

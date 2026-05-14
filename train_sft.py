@@ -142,12 +142,13 @@ def main():
     ap.add_argument("--lr", type=float, default=2e-4)
     ap.add_argument("--lora_r", type=int, default=16)
     ap.add_argument("--lora_alpha", type=int, default=16)
-    ap.add_argument("--lora_dropout", type=float, default=0.05)
+    ap.add_argument("--lora_dropout", type=float, default=0.0)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--max_rows", type=int, default=None)
     ap.add_argument("--eval_steps", type=int, default=100)
     ap.add_argument("--save_steps", type=int, default=200)
     ap.add_argument("--logging_steps", type=int, default=10)
+    ap.add_argument("--warmup_ratio", type=float, default=0.03)
     # ---- Outputs ----
     ap.add_argument("--output_dir", default="./output")
     ap.add_argument("--run_name", default=None)
@@ -274,12 +275,19 @@ def main():
     # assistant_only_loss=False because we apply Unsloth's train_on_responses_only
     # after building the trainer — the Unsloth compiled wrapper conflicts with
     # TRL's native assistant_only_loss path (same pattern as notebook 02).
+    # warmup_ratio is deprecated in transformers v5 / TRL — convert it to an
+    # absolute warmup_steps using math.ceil (transformers' own convention).
+    import math
+    total_optim_steps = max(1, int(len(train_ds) * args.epochs
+                                    / (args.batch_size * args.grad_accum)))
+    warmup_steps = max(1, math.ceil(args.warmup_ratio * total_optim_steps))
+    print(f"[train] total_optim_steps={total_optim_steps}  warmup_steps={warmup_steps}")
     sft_config = SFTConfig(
         output_dir=args.output_dir,
         run_name=args.run_name,
         per_device_train_batch_size=args.batch_size,
         gradient_accumulation_steps=args.grad_accum,
-        warmup_ratio=0.03,
+        warmup_steps=warmup_steps,
         num_train_epochs=args.epochs,
         learning_rate=args.lr,
         fp16=not is_bfloat16_supported(),
