@@ -114,6 +114,11 @@ def train(track: str, cfg: dict, repo_dir: Path, full: bool) -> None:
     if max_rows is not None:
         cmd += f" --max_rows {max_rows}"
 
+    # Forward observability cadence from config so dry-run actually evals/saves/logs
+    cmd += f" --eval_steps {cfg['training']['eval_steps']}"
+    cmd += f" --save_steps {cfg['training']['save_steps']}"
+    cmd += f" --logging_steps {cfg['training']['logging_steps']}"
+
     _run(cmd, repo_dir)
 
 
@@ -157,7 +162,7 @@ def run_inference(cfg: dict, repo_dir: Path) -> None:
     split_path.parent.mkdir(parents=True, exist_ok=True)
     split_path.write_text(json.dumps({
         "indices": (
-            test_ds._indices.tolist()
+            test_ds._indices.to_pylist()
             if hasattr(test_ds, "_indices") and test_ds._indices is not None
             else list(range(len(test_ds)))
         ),
@@ -254,22 +259,31 @@ def run_metrics(cfg: dict) -> None:
     )
     print(json.dumps(summary, indent=2))
 
-    # Inference diagnostics
+    # Inference diagnostics. compute_operational_stats may omit any key when
+    # the underlying column is missing or non-numeric, so guard each format
+    # with a numeric-only helper instead of passing the string fallback
+    # straight into a `:.1%`/`:.3f` spec (which would ValueError).
+    def _pct(v):
+        return f"{v:.1%}" if isinstance(v, (int, float)) else "N/A"
+
+    def _sec(v):
+        return f"{v:.3f}s" if isinstance(v, (int, float)) else "N/A"
+
     for track_name, csv_path in [("A", "outputs/trackA/predictions.csv"),
                                    ("B", "outputs/trackB/predictions.csv")]:
         df = pd.read_csv(csv_path)
         stats = compute_operational_stats(df)
         print(f"\n=== Track {track_name} Inference Diagnostics ===")
-        print(f"  truncation_rate:           {stats.get('truncation_rate', 'N/A'):.1%}")
-        print(f"  empty_prediction_rate:     {stats.get('empty_prediction_rate', 'N/A'):.1%}")
+        print(f"  truncation_rate:           {_pct(stats.get('truncation_rate'))}")
+        print(f"  empty_prediction_rate:     {_pct(stats.get('empty_prediction_rate'))}")
         print(f"  finish_reason_dist:        {stats.get('finish_reason_dist', {})}")
         print(f"  output_tokens p50/p90/p99: "
               f"{stats.get('output_tokens_p50', '?')} / "
               f"{stats.get('output_tokens_p90', '?')} / "
               f"{stats.get('output_tokens_p99', '?')}")
         print(f"  gen_time p50/p90:          "
-              f"{stats.get('generation_time_p50', '?'):.3f}s / "
-              f"{stats.get('generation_time_p90', '?'):.3f}s")
+              f"{_sec(stats.get('generation_time_p50'))} / "
+              f"{_sec(stats.get('generation_time_p90'))}")
 
 
 # ============================================================

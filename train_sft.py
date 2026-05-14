@@ -145,6 +145,9 @@ def main():
     ap.add_argument("--lora_dropout", type=float, default=0.05)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--max_rows", type=int, default=None)
+    ap.add_argument("--eval_steps", type=int, default=100)
+    ap.add_argument("--save_steps", type=int, default=200)
+    ap.add_argument("--logging_steps", type=int, default=10)
     # ---- Outputs ----
     ap.add_argument("--output_dir", default="./output")
     ap.add_argument("--run_name", default=None)
@@ -281,11 +284,11 @@ def main():
         learning_rate=args.lr,
         fp16=not is_bfloat16_supported(),
         bf16=is_bfloat16_supported(),
-        logging_steps=10,
+        logging_steps=args.logging_steps,
         eval_strategy="steps",
-        eval_steps=100,
+        eval_steps=args.eval_steps,
         save_strategy="steps",
-        save_steps=200,
+        save_steps=args.save_steps,
         save_total_limit=2,
         optim="adamw_8bit",
         weight_decay=0.01,
