@@ -41,8 +41,17 @@ def shuffle_filter_split(
     *,
     tokenizer: Any = None,
     max_total_tokens: int | None = None,
+    max_rows: int | None = None,
 ):
     """Shuffle, optionally filter for length, then take train/val/test.
+
+    Parameters
+    ----------
+    max_rows : int | None
+        If set, cap the dataset to this many rows *before* shuffling and
+        filtering.  Use for dry-run / smoke-test runs where you only want
+        to verify the pipeline works, not train on the full dataset.
+        Set to None (default) to use the full dataset.
 
     Returns
     -------
@@ -52,6 +61,9 @@ def shuffle_filter_split(
     ------
     ValueError if not enough rows remain after filtering.
     """
+    if max_rows is not None:
+        ds = ds.select(range(min(len(ds), max_rows)))
+
     shuffled = ds.shuffle(seed=shuffle_seed)
 
     if tokenizer is not None and max_total_tokens is not None:

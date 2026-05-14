@@ -25,6 +25,7 @@ dataset:
   name: OpenMed/Medical-Reasoning-SFT-GPT-OSS-120B-V2
   split: train
   shuffle_seed: 42
+  max_rows: 10000                   # FULL: null   — cap rows loaded before shuffle/filter; avoids scanning all 506K
   num_train: 100                   # FULL: 3000
   num_val: 10                      # FULL: 100
   num_test: 5                      # FULL: 200
