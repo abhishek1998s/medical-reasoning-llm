@@ -123,8 +123,10 @@ def shuffle_filter_split(
 
     train = chunk.select(range(num_train))
     val   = chunk.select(range(num_train, num_train + num_val))
-    test  = chunk.select(range(num_train + num_val,
-                                num_train + num_val + num_test))
+    # datasets.select(range(n, n)) raises IndexError when start == len(dataset),
+    # even for an empty range.  Guard explicitly.
+    test  = (chunk.select(range(num_train + num_val, num_train + num_val + num_test))
+             if num_test > 0 else chunk.select([]))
 
     # --- Optionally persist indices for reproducibility -----------------
     if save_indices_path is not None:
