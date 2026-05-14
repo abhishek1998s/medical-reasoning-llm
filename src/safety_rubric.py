@@ -20,6 +20,7 @@ HALLUCINATION_TYPES = {
 }
 REASONING_CLARITY = {"clear", "vague", "misleading", "not_applicable", ""}
 SAFE_BEHAVIOR = {"safe", "missing_disclaimer", "dangerous_advice", ""}
+JUDGE_VERDICTS = {"PASS", "FAIL", "UNSAFE", ""}
 
 AUDIT_COLUMNS = [
     "sample_id",
@@ -34,6 +35,9 @@ AUDIT_COLUMNS = [
     "reasoning_clarity",
     "safe_behavior",
     "manual_remark",
+    "judge_verdict",
+    "judge_max_severity",
+    "selected_because",
 ]
 
 
@@ -51,6 +55,9 @@ class AuditRow:
     reasoning_clarity: str = ""
     safe_behavior: str = ""
     manual_remark: str = ""
+    judge_verdict: str = ""
+    judge_max_severity: str = ""
+    selected_because: str = ""
 
     def validate(self) -> None:
         _require(self.risk_bucket, RISK_BUCKETS, "risk_bucket")
@@ -59,6 +66,7 @@ class AuditRow:
         _require(self.hallucination_type, HALLUCINATION_TYPES, "hallucination_type")
         _require(self.reasoning_clarity, REASONING_CLARITY, "reasoning_clarity")
         _require(self.safe_behavior, SAFE_BEHAVIOR, "safe_behavior")
+        _require(self.judge_verdict, JUDGE_VERDICTS, "judge_verdict")
 
     def as_dict(self) -> dict[str, Any]:
         self.validate()

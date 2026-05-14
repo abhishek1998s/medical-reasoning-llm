@@ -126,15 +126,116 @@ class MetricBundle:
         return {"exact_match": self.exact_match, "rouge_l": self.rouge_l, "n": self.n}
 
 
-def compute_core_metrics(predictions: Sequence[str], references: Sequence[str]) -> dict[str, Any]:
-    """Compute the dependency-free metrics used in quick local checks."""
+def compute_core_metrics(
+    predictions: Sequence[str],
+    references: Sequence[str],
+    *,
+    try_bertscore: bool = False,
+) -> dict[str, Any]:
+    """Compute the dependency-free metrics used in quick local checks.
+
+    Parameters
+    ----------
+    try_bertscore : bool
+        When True, attempt to import ``bert_score`` and add ``bertscore_f1``
+        to the returned dict.  If the package is not installed or scoring
+        fails for any reason, the key is silently omitted.
+    """
     em = compute_em(predictions, references)
     rouge = compute_rouge_l(predictions, references)
-    return MetricBundle(
+    result = MetricBundle(
         exact_match=em["exact_match"],
         rouge_l=rouge["rouge_l"],
         n=em["n"],
     ).as_dict()
+
+    if try_bertscore:
+        try:
+            bs = compute_bertscore(predictions, references)
+            result["bertscore_f1"] = bs["bertscore_f1"]
+        except Exception:
+            pass  # not installed or scoring failed — silently skip
+
+    return result
+
+
+def compute_operational_stats(df: Any) -> dict[str, Any]:
+    """Compute operational / generation-quality statistics from a predictions CSV.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The predictions DataFrame, typically loaded from the CSV written by
+        the inference script.  Expected columns (all optional — missing
+        columns are silently skipped):
+
+        - ``truncated``       : bool — whether the generation was truncated
+        - ``prediction``      : str  — the generated answer text
+        - ``finish_reason``   : str  — e.g. ``"stop"``, ``"length"``
+        - ``output_tokens``   : int  — number of tokens in the generation
+        - ``generation_time_s``: float — wall-clock seconds for the call
+
+    Returns
+    -------
+    dict with a subset of the following keys depending on which columns
+    are present:
+
+    - ``truncation_rate``        : float
+    - ``empty_prediction_rate``  : float
+    - ``finish_reason_dist``     : dict[str, int]
+    - ``output_tokens_p50``      : float
+    - ``output_tokens_p90``      : float
+    - ``output_tokens_p99``      : float
+    - ``generation_time_p50``    : float
+    - ``generation_time_p90``    : float
+    """
+    stats: dict[str, Any] = {}
+
+    if len(df) == 0:
+        return stats
+
+    # truncation_rate
+    if "truncated" in df.columns:
+        try:
+            stats["truncation_rate"] = float(df["truncated"].astype(bool).mean())
+        except Exception:
+            pass
+
+    # empty_prediction_rate
+    if "prediction" in df.columns:
+        try:
+            empty = df["prediction"].isna() | (df["prediction"].astype(str).str.strip() == "")
+            stats["empty_prediction_rate"] = float(empty.mean())
+        except Exception:
+            pass
+
+    # finish_reason_dist
+    if "finish_reason" in df.columns:
+        try:
+            stats["finish_reason_dist"] = df["finish_reason"].value_counts().to_dict()
+        except Exception:
+            pass
+
+    # output_tokens percentiles
+    if "output_tokens" in df.columns:
+        try:
+            col = df["output_tokens"].dropna()
+            stats["output_tokens_p50"] = float(col.quantile(0.50))
+            stats["output_tokens_p90"] = float(col.quantile(0.90))
+            stats["output_tokens_p99"] = float(col.quantile(0.99))
+        except Exception:
+            pass
+
+    # generation_time_s percentiles
+    if "generation_time_s" in df.columns:
+        try:
+            col = df["generation_time_s"].dropna()
+            stats["generation_time_p50"] = float(col.quantile(0.50))
+            stats["generation_time_p90"] = float(col.quantile(0.90))
+        except Exception:
+            pass
+
+    return stats
 
 
 def _validate_parallel(predictions: Sequence[str], references: Sequence[str]) -> None:

@@ -50,6 +50,7 @@ from datasets import load_dataset
 from trl import SFTTrainer, SFTConfig
 
 from src.data_formatting import format_for_track_a, format_for_track_b
+from src.splits import shuffle_filter_split
 
 
 # ============================================================
@@ -77,7 +78,33 @@ def render_chat_template(examples, tokenizer):
 
 
 # ============================================================
-# 2. Main
+# 2. Masking preflight check
+# ============================================================
+
+def _verify_masking(trainer) -> None:
+    sample = trainer.train_dataset[0]
+    labels = list(sample.get("labels", sample.get("label", [])))
+    if not labels:
+        print("[mask-check] WARNING: no labels found, cannot verify masking")
+        return
+    n_masked = sum(1 for l in labels if l == -100)
+    n_trainable = sum(1 for l in labels if l != -100)
+    if n_trainable == 0:
+        raise AssertionError(
+            f"MASKING ERROR: all {len(labels)} labels are -100. "
+            "train_on_responses_only masked everything — check response_part marker."
+        )
+    if n_masked == 0:
+        raise AssertionError(
+            f"MASKING ERROR: no labels are -100. "
+            "User/system tokens are not being masked — check instruction_part marker."
+        )
+    pct = n_trainable / len(labels) * 100
+    print(f"[mask-check] OK: {n_trainable}/{len(labels)} tokens trainable ({pct:.1f}% assistant)")
+
+
+# ============================================================
+# 3. Main
 # ============================================================
 
 def main():
@@ -99,6 +126,7 @@ def main():
     ap.add_argument("--lora_alpha", type=int, default=16)
     ap.add_argument("--lora_dropout", type=float, default=0.05)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--max_rows", type=int, default=None)
     # ---- Outputs ----
     ap.add_argument("--output_dir", default="./output")
     ap.add_argument("--run_name", default=None)
@@ -167,8 +195,8 @@ def main():
     ds = load_dataset(args.dataset, split="train")
     print(f"[data] full size: {len(ds)}")
 
-    ds = ds.shuffle(seed=args.seed).select(range(min(args.num_samples, len(ds))))
-    print(f"[data] using:    {len(ds)}")
+    num_val = max(1, int(args.num_samples * 0.05))
+    cot_budget = args.short_cot_tokens if args.track == "A_short" else None
 
     # Reformat per track using the tested formatters from src/data_formatting.py.
     # A_full passes a huge token limit so truncate_to_n_tokens is effectively a no-op.
@@ -187,25 +215,39 @@ def main():
             short_cot_max_tokens=99_999,
         )
 
-    ds = ds.map(formatter, load_from_cache_file=False)
+    train_ds, eval_ds, _ = shuffle_filter_split(
+        ds,
+        shuffle_seed=args.seed,
+        num_train=args.num_samples,
+        num_val=num_val,
+        num_test=0,
+        max_rows=args.max_rows,
+        cot_budget=cot_budget,
+        save_indices_path=str(Path(args.output_dir) / "split_indices.json"),
+    )
+    print(f"[data] train: {len(train_ds)}  eval: {len(eval_ds)}")
+
+    train_ds = train_ds.map(formatter, load_from_cache_file=False)
+    eval_ds  = eval_ds.map(formatter, load_from_cache_file=False)
 
     # Render chat template -> 'text'
-    ds = ds.map(
+    train_ds = train_ds.map(
         lambda ex: render_chat_template(ex, tokenizer),
         batched=True,
-        remove_columns=ds.column_names,
+        remove_columns=train_ds.column_names,
+        load_from_cache_file=False,
+    )
+    eval_ds = eval_ds.map(
+        lambda ex: render_chat_template(ex, tokenizer),
+        batched=True,
+        remove_columns=eval_ds.column_names,
         load_from_cache_file=False,
     )
 
     print("\n[data] sample after formatting:")
     print("-" * 60)
-    print(ds[0]["text"][:1200])
+    print(train_ds[0]["text"][:1200])
     print("-" * 60)
-
-    # 95/5 split
-    split = ds.train_test_split(test_size=0.05, seed=args.seed)
-    train_ds, eval_ds = split["train"], split["test"]
-    print(f"[data] train: {len(train_ds)}  eval: {len(eval_ds)}")
 
     # ---- SFT config ----
     # assistant_only_loss=False because we apply Unsloth's train_on_responses_only
@@ -254,6 +296,7 @@ def main():
         instruction_part=instr_part,
         response_part=resp_part,
     )
+    _verify_masking(trainer)
 
     # GPU memory before
     if torch.cuda.is_available():
@@ -291,6 +334,18 @@ def main():
         "train_runtime_sec": train_stats.metrics.get("train_runtime"),
         "train_loss": train_stats.metrics.get("train_loss"),
         "eval_loss": final_eval_loss,
+        "dataset_stats": {
+            "n_train": len(train_ds),
+            "n_eval": len(eval_ds),
+            "max_rows_cap": args.max_rows,
+            "cot_budget_tokens": cot_budget,
+        },
+        "packages": {
+            "unsloth": getattr(__import__("unsloth"), "__version__", "?"),
+            "transformers": getattr(__import__("transformers"), "__version__", "?"),
+            "trl": getattr(__import__("trl"), "__version__", "?"),
+            "peft": getattr(__import__("peft"), "__version__", "?"),
+        },
     }
     with open(save_path / "training_meta.json", "w") as f:
         json.dump(meta, f, indent=2)
