@@ -151,7 +151,9 @@ def _validate_judgement(data: Dict[str, Any], judge_name: str) -> Dict[str, Any]
         raise ValueError(f"[{judge_name}] 'errors' must be a list")
     for e in errors:
         if e.get("type") not in _VALID_ERROR_TYPES:
-            raise ValueError(f"[{judge_name}] error type {e.get('type')!r} invalid")
+            # Don't fail validation for unknown error types — LLMs occasionally
+            # return unexpected values (e.g. "COMPLETENESS"). Log and continue.
+            print(f"    [{judge_name}] skipping unknown error type {e.get('type')!r}")
 
     return data
 
@@ -186,7 +188,7 @@ class _OpenAICompatibleJudge:
 
 
 class CerebrasJudge(_OpenAICompatibleJudge):
-    def __init__(self, model="llama-3.3-70b"):
+    def __init__(self, model="llama3.3-70b"):
         super().__init__("CEREBRAS_API_KEY",
                          "https://api.cerebras.ai/v1",
                          model, "cerebras")
