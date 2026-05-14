@@ -103,7 +103,12 @@ hub:
     trackB: qwen25-1.5b-medreason-trackB-dryrun   # FULL: qwen25-1.5b-medreason-trackB-v0
 
 judge:
-  consensus_mode: true              # true = call every available judge per row (Cerebras + Groq + Gemini)
-                                    # and aggregate. false = single-judge fallback chain (Cerebras -> Groq -> Gemini).
-                                    # Consensus produces lower-variance scores at the cost of ~3x API calls;
-                                    # use it for the report-quality final run.
+  consensus_mode: true              # true = call every available judge per row and aggregate.
+                                    # false = single-judge fallback chain. Use true for the report-quality run.
+  providers:                        # which judges to initialise (priority order in fallback mode,
+                                    # union in consensus mode).
+    - cerebras                      # gpt-oss-120b (different family from Qwen student; 1M TPD)
+    - gemini                        # gemini-2.5-flash (different vendor; ~1500 RPD)
+  # groq is intentionally omitted: 100K tokens/day free-tier cap is insufficient
+  # for 200 rows x 2 tracks x ~2K tok/call = ~800K tokens. Add it back here for
+  # dry-run testing (5 rows fits well within Groq's daily budget).
