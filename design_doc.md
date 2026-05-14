@@ -6,10 +6,10 @@
 **Version**: 1.0
 **Status**: Learning artefact — not a clinical product, no deployment.
 
-> The full implementation specification (configuration, data flow, day-by-day
-> schedule, risks, deliverables) lives in
-> `docs/superpowers/specs/2026-05-02-medical-reasoning-llm-design.md`.
 > This document is the short Phase-1 design doc the assignment requires.
+> The runnable implementation lives in `train_sft.py`, `llm_judge.py`,
+> `run_pipeline.py`, and `notebooks/full_pipeline.ipynb`; experiment
+> hyperparameters are in `configs/experiment_config.yaml`.
 
 ---
 

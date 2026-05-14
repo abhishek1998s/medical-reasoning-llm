@@ -249,7 +249,10 @@ def run_metrics(cfg: dict) -> None:
         df = pd.read_csv(path)
         preds = [extract_answer_for_scoring(p, track) for p in df["prediction"]]
         refs  = list(df["reference"])
-        core  = compute_core_metrics(preds, refs)
+        # try_bertscore=True: PDF Phase 3 requires "Semantic Scores" alongside
+        # EM; BERTScore is the semantic metric. Silently skipped if bert-score
+        # isn't installed (compute_core_metrics catches ImportError).
+        core  = compute_core_metrics(preds, refs, try_bertscore=True)
         core["mean_output_tokens"]     = round(float(df["output_tokens"].mean()), 2)
         core["mean_generation_time_s"] = round(float(df["generation_time_s"].mean()), 3)
         core["mean_tokens_per_sec"]    = round(float(df["tokens_per_sec"].mean()), 2)
