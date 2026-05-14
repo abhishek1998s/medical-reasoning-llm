@@ -1,28 +1,39 @@
 # Medical Reasoning LLM
 
-Fine-tune a small open-weight LLM on `OpenMed/Medical-Reasoning-SFT-GPT-OSS-120B-V2`
-and compare with-reasoning vs answer-only training.
-**Learning artefact — not a clinical product, no deployment.**
+Fine-tune a small open-weight LLM on
+`OpenMed/Medical-Reasoning-SFT-GPT-OSS-120B-V2` and compare visible short
+clinical reasoning against answer-only training.
 
-## Project documents
+This is a learning artifact, not a clinical product, and it is not intended for
+deployment or medical decision-making.
 
-- **Spec (full implementation):** [docs/superpowers/specs/2026-05-02-medical-reasoning-llm-design.md](docs/superpowers/specs/2026-05-02-medical-reasoning-llm-design.md)
-- **Phase-1 design doc (assignment deliverable):** [design_doc.md](design_doc.md)
-- **Plan 1 (current — bootstrap + Notebook 01):** [docs/superpowers/plans/2026-05-02-plan1-bootstrap-and-notebook01.md](docs/superpowers/plans/2026-05-02-plan1-bootstrap-and-notebook01.md)
+## Project Documents
 
-## Quick start (local — `src/` tests)
+- Full implementation spec:
+  [docs/superpowers/specs/2026-05-02-medical-reasoning-llm-design.md](docs/superpowers/specs/2026-05-02-medical-reasoning-llm-design.md)
+- Phase-1 assignment design doc:
+  [design_doc.md](design_doc.md)
+- Assignment PDF:
+  [Assignment_ Fine-Tune a LLM for Reasoning.pdf](Assignment_%20Fine-Tune%20a%20LLM%20for%20Reasoning.pdf)
+
+## Quick Start: Local Tests
 
 ```powershell
-pip install transformers pytest
-python -m pytest tests/ -v
+pip install pytest transformers datasets
+# Run pure-Python tests (no GPU required)
+python -m pytest tests/test_metrics.py tests/test_safety_rubric.py -v --basetemp=outputs/pytest-tmp
+# Run all tests (requires transformers + datasets installed)
+python -m pytest tests/ -v --basetemp=outputs/pytest-tmp
 ```
 
-You don't need the full `requirements.txt` locally — only the GPU notebooks
-on Kaggle do.
+The `--basetemp` flag avoids a Windows permission error with pytest's default
+temp directory. The heavyweight GPU stack in `requirements.txt` is needed for
+Kaggle/Colab training and evaluation notebooks, not for most local source-code
+checks.
 
-## Quick start (Kaggle — training notebooks)
+## Quick Start: Kaggle Training
 
-Inside any Kaggle notebook (T4 GPU, internet on):
+Use a Kaggle notebook with GPU enabled and internet on:
 
 ```python
 !git clone https://github.com/abhishek1998s/medical-reasoning-llm.git
@@ -30,25 +41,51 @@ Inside any Kaggle notebook (T4 GPU, internet on):
 !pip install -q -r requirements.txt
 ```
 
-Then run cells. Adapters and large CSVs go under `outputs/` (gitignored).
+Run notebooks in order:
+
+1. `notebooks/01_setup_and_data_exploration.ipynb`
+2. `notebooks/02_train_trackB_answer_only.ipynb`
+3. `notebooks/03_train_trackA_short_cot.ipynb`
+4. `notebooks/04_inference_and_metrics.ipynb`
+5. `notebooks/05_llm_judge_and_safety_review.ipynb`
+6. `notebooks/06_report_and_comparison.ipynb`
+
+Large artifacts go under `outputs/`, which is gitignored.
 
 ## Layout
 
-```
+```text
 .
-├── configs/experiment_config.yaml   # single source of truth
-├── src/                              # reusable utilities (formatters, etc.)
-├── tests/                            # pytest suite for src/
-├── notebooks/                        # 6 Jupyter notebooks (added day-by-day)
-├── docs/superpowers/                 # spec + plans
-├── design_doc.md                     # short Phase-1 assignment deliverable
-├── train_sft.py                      # consolidated at end of project
-├── llm_judge.py                      # consolidated at end of project
-└── outputs/                          # gitignored: adapters, predictions, audits
+|-- configs/experiment_config.yaml
+|-- docs/superpowers/
+|-- notebooks/
+|   |-- 01_setup_and_data_exploration.ipynb
+|   |-- 02_train_trackB_answer_only.ipynb
+|   |-- 03_train_trackA_short_cot.ipynb
+|   |-- 04_inference_and_metrics.ipynb
+|   |-- 05_llm_judge_and_safety_review.ipynb
+|   `-- 06_report_and_comparison.ipynb
+|-- scripts/
+|   |-- build_notebook_01.py
+|   |-- build_notebook_02.py
+|   `-- build_missing_notebooks.py
+|-- src/
+|   |-- data_formatting.py
+|   |-- inference.py
+|   |-- metrics.py
+|   |-- safety_rubric.py
+|   `-- splits.py
+|-- tests/
+|-- train_sft.py
+|-- llm_judge.py
+`-- outputs/
 ```
 
-## Status
+## Current Status
 
-- Day 0 (bootstrap) — complete
-- Day 1 (Notebook 01: setup + data exploration) — in progress
-- Days 2–7 — pending
+- Phase 1 design document: present.
+- Track A/B formatting and deterministic splitting: implemented and tested.
+- Training notebooks for Track B and Track A: present.
+- Inference, metrics, judge, audit, and report notebooks: present.
+- Remaining work requires GPU/API execution: train adapters, generate
+  predictions, run judges, complete the manual audit, and fill final results.

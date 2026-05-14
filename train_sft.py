@@ -6,95 +6,65 @@ Fine-tunes a small instruct model (Qwen2.5-1.5B-Instruct by default) on the
 OpenMed Medical-Reasoning-SFT dataset using Unsloth + QLoRA.
 
 Supports three tracks via --track:
-    A_full   : Full chain-of-thought reasoning + answer
-    A_short  : Truncated CoT (first ~150 tokens of reasoning) + answer
+    A_full   : Full chain-of-thought reasoning + final answer
+    A_short  : Truncated CoT (first ~150 tokens, sentence-boundary) + final answer
     B        : Answer only (no reasoning)
 
-Day 2 — Track B baseline on Kaggle P100:
-    python train_sft.py --track B --num_samples 5000
+Output format for Track A (both variants):
+    Clinical rationale:
+    <reasoning>
 
-Day 3 — Track A full + short on Kaggle P100:
-    python train_sft.py --track A_full --num_samples 5000 --max_seq_length 4096 \
-        --batch_size 1 --grad_accum 16
-    python train_sft.py --track A_short --num_samples 5000
+    Final answer:
+    <answer>
 
-Day 4 — Final scaled run on C-DAC A30 / A100:
-    python train_sft.py \
-        --model unsloth/Llama-3.2-3B-Instruct-bnb-4bit \
-        --track A_full \
-        --num_samples 30000 \
-        --max_seq_length 4096 \
-        --batch_size 8 --grad_accum 4 \
+Day 2 — Track B baseline on Kaggle T4:
+    python train_sft.py --track B --num_samples 3000
+
+Day 3 — Track A short-CoT on Kaggle T4:
+    python train_sft.py --track A_short --num_samples 3000
+
+Day 4 — Final scaled run on A30 / A100:
+    python train_sft.py \\
+        --model unsloth/Llama-3.2-3B-Instruct-bnb-4bit \\
+        --track A_short \\
+        --num_samples 30000 \\
+        --max_seq_length 4096 \\
+        --batch_size 8 --grad_accum 4 \\
         --push_to_hub --hub_repo your-username/llama32-3b-medreason-trackA-final
 
-Tested with: unsloth >= 2024.10, trl >= 0.12, transformers >= 4.46
+Tested with: unsloth==2026.4.8, trl==0.24.0, transformers==5.5.0, peft==0.19.1
 """
 
 import argparse
+import functools
 import os
 import json
 from pathlib import Path
 
 # Unsloth must be imported BEFORE transformers/trl (it patches them).
 from unsloth import FastLanguageModel, is_bfloat16_supported
-from unsloth.chat_templates import get_chat_template
+from unsloth.chat_templates import get_chat_template, train_on_responses_only
 
 import torch
 from datasets import load_dataset
 from trl import SFTTrainer, SFTConfig
 
+from src.data_formatting import format_for_track_a, format_for_track_b
+
 
 # ============================================================
-# 1. Dataset formatting — three tracks
+# 1. Chat-template response markers (model-specific)
 # ============================================================
 
-def _truncate_to_n_tokens(text: str, tokenizer, max_tokens: int) -> str:
-    """Truncate text to roughly max_tokens tokens (best-effort, keeps prefix)."""
-    ids = tokenizer.encode(text, add_special_tokens=False)
-    if len(ids) <= max_tokens:
-        return text
-    return tokenizer.decode(ids[:max_tokens], skip_special_tokens=True) + " ..."
-
-
-def make_formatter(track: str, tokenizer, short_cot_tokens: int = 150):
-    """
-    Return a function row -> {"messages": [...]}  re-shaped per track.
-
-    OpenMed schema: each row has a `messages` list. Assistant turns carry both
-        - `content`           : the final answer (clean string)
-        - `reasoning_content` : the GPT-OSS-120B chain-of-thought
-    """
-    def fmt(example):
-        out = []
-        for m in example["messages"]:
-            role = m["role"]
-            if role == "user":
-                out.append({"role": "user", "content": m["content"]})
-                continue
-
-            if role == "assistant":
-                content   = (m.get("content") or "").strip()
-                reasoning = (m.get("reasoning_content") or "").strip()
-
-                if track == "B":
-                    final = content                                                  # answer only
-                elif track == "A_full":
-                    final = f"<think>\n{reasoning}\n</think>\n\n{content}"          # full CoT
-                elif track == "A_short":
-                    short = _truncate_to_n_tokens(reasoning, tokenizer, short_cot_tokens)
-                    final = f"<think>\n{short}\n</think>\n\n{content}"             # short CoT
-                else:
-                    raise ValueError(f"Unknown track: {track}")
-
-                out.append({"role": "assistant", "content": final})
-                continue
-
-            # System/tool messages pass through.
-            out.append(m)
-
-        return {"messages": out}
-
-    return fmt
+# train_on_responses_only needs these to identify where the assistant turn
+# starts so it can mask user/system tokens with label=-100.
+_RESPONSE_PARTS: dict[str, tuple[str, str]] = {
+    "qwen-2.5":  ("<|im_start|>user\n",                          "<|im_start|>assistant\n"),
+    "llama-3.1": ("<|start_header_id|>user<|end_header_id|>\n\n",
+                  "<|start_header_id|>assistant<|end_header_id|>\n\n"),
+    "phi-3":     ("<|user|>\n",                                   "<|assistant|>\n"),
+    "chatml":    ("<|im_start|>user\n",                          "<|im_start|>assistant\n"),
+}
 
 
 def render_chat_template(examples, tokenizer):
@@ -117,7 +87,7 @@ def main():
                     help="Use the unsloth/*-bnb-4bit variants for QLoRA.")
     ap.add_argument("--track", required=True, choices=["A_full", "A_short", "B"])
     ap.add_argument("--dataset", default="OpenMed/Medical-Reasoning-SFT-GPT-OSS-120B-V2")
-    ap.add_argument("--num_samples", type=int, default=5000)
+    ap.add_argument("--num_samples", type=int, default=3000)
     ap.add_argument("--short_cot_tokens", type=int, default=150)
     # ---- Training hyperparams ----
     ap.add_argument("--max_seq_length", type=int, default=2048)
@@ -200,15 +170,31 @@ def main():
     ds = ds.shuffle(seed=args.seed).select(range(min(args.num_samples, len(ds))))
     print(f"[data] using:    {len(ds)}")
 
-    # Reformat per track
-    formatter = make_formatter(args.track, tokenizer, args.short_cot_tokens)
-    ds = ds.map(formatter)
+    # Reformat per track using the tested formatters from src/data_formatting.py.
+    # A_full passes a huge token limit so truncate_to_n_tokens is effectively a no-op.
+    if args.track == "B":
+        formatter = format_for_track_b
+    elif args.track == "A_short":
+        formatter = functools.partial(
+            format_for_track_a,
+            tokenizer=tokenizer,
+            short_cot_max_tokens=args.short_cot_tokens,
+        )
+    else:  # A_full — keep the entire chain-of-thought
+        formatter = functools.partial(
+            format_for_track_a,
+            tokenizer=tokenizer,
+            short_cot_max_tokens=99_999,
+        )
+
+    ds = ds.map(formatter, load_from_cache_file=False)
 
     # Render chat template -> 'text'
     ds = ds.map(
         lambda ex: render_chat_template(ex, tokenizer),
         batched=True,
         remove_columns=ds.column_names,
+        load_from_cache_file=False,
     )
 
     print("\n[data] sample after formatting:")
@@ -222,6 +208,9 @@ def main():
     print(f"[data] train: {len(train_ds)}  eval: {len(eval_ds)}")
 
     # ---- SFT config ----
+    # assistant_only_loss=False because we apply Unsloth's train_on_responses_only
+    # after building the trainer — the Unsloth compiled wrapper conflicts with
+    # TRL's native assistant_only_loss path (same pattern as notebook 02).
     sft_config = SFTConfig(
         output_dir=args.output_dir,
         run_name=args.run_name,
@@ -242,9 +231,10 @@ def main():
         weight_decay=0.01,
         lr_scheduler_type="cosine",
         seed=args.seed,
-        max_seq_length=args.max_seq_length,
+        max_length=args.max_seq_length,
         dataset_text_field="text",
         packing=False,                    # safer than packing for chat data
+        assistant_only_loss=False,
         report_to="wandb",
     )
 
@@ -254,6 +244,15 @@ def main():
         train_dataset=train_ds,
         eval_dataset=eval_ds,
         args=sft_config,
+    )
+
+    # Mask user/system tokens — only assistant tokens contribute to the loss.
+    instr_part, resp_part = _RESPONSE_PARTS.get(chat_template_name,
+                                                 _RESPONSE_PARTS["chatml"])
+    trainer = train_on_responses_only(
+        trainer,
+        instruction_part=instr_part,
+        response_part=resp_part,
     )
 
     # GPU memory before
@@ -266,6 +265,11 @@ def main():
     train_stats = trainer.train()
     print("[train] done.")
     print(train_stats.metrics)
+
+    # Read eval_loss from log_history rather than train_stats.metrics — in
+    # transformers v5 the metrics dict doesn't include eval_loss after train().
+    eval_entries = [e for e in trainer.state.log_history if "eval_loss" in e]
+    final_eval_loss = eval_entries[-1]["eval_loss"] if eval_entries else None
 
     # ---- Save adapter + metadata ----
     save_path = Path(args.output_dir) / "final_adapter"
@@ -286,7 +290,7 @@ def main():
         "chat_template": chat_template_name,
         "train_runtime_sec": train_stats.metrics.get("train_runtime"),
         "train_loss": train_stats.metrics.get("train_loss"),
-        "eval_loss": train_stats.metrics.get("eval_loss"),
+        "eval_loss": final_eval_loss,
     }
     with open(save_path / "training_meta.json", "w") as f:
         json.dump(meta, f, indent=2)
