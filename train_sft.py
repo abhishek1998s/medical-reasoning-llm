@@ -67,6 +67,13 @@ import torch
 from datasets import load_dataset
 from trl import SFTTrainer, SFTConfig
 
+# transformers v5 fires `use_return_dict` etc. via its own warning_once() —
+# which uses internal logging, not Python's warnings module. Both pipes must
+# be silenced; the warnings.filterwarnings calls above catch the former,
+# this catches the latter.
+import transformers
+transformers.logging.set_verbosity_error()
+
 from src.data_formatting import format_for_track_a, format_for_track_b
 from src.splits import shuffle_filter_split
 
