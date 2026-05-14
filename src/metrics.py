@@ -153,8 +153,30 @@ def compute_core_metrics(
         try:
             bs = compute_bertscore(predictions, references)
             result["bertscore_f1"] = bs["bertscore_f1"]
-        except Exception:
-            pass  # not installed or scoring failed — silently skip
+            result["bertscore_model"] = bs.get("model_type")
+        except ImportError as e:
+            # bert-score package missing — log so we know to install it
+            print(f"[metrics] BERTScore skipped: bert-score not installed ({e})")
+        except Exception as e:
+            # Network timeout, OOM, model-download failure, transformers-v5 incompat etc.
+            # Surface the error instead of silently dropping the metric so we can fix
+            # the root cause. Empirically the dry-run got here despite bert-score being
+            # installed — most likely the deberta-xlarge-mnli download fails on Kaggle.
+            import traceback
+            print(f"[metrics] BERTScore FAILED: {type(e).__name__}: {e}")
+            print(f"[metrics] traceback:\n{traceback.format_exc(limit=3)}")
+            # Fallback: smaller model (roberta-large ~500 MB vs deberta-xlarge ~1.5 GB).
+            # Most likely root cause for the silent skip is the 1.5 GB download
+            # timing out on Kaggle; roberta-large fits in a fast download.
+            try:
+                print("[metrics] retrying BERTScore with roberta-large fallback ...")
+                bs = compute_bertscore(predictions, references,
+                                       model_type="roberta-large", lang="en")
+                result["bertscore_f1"] = bs["bertscore_f1"]
+                result["bertscore_model"] = "roberta-large (fallback)"
+                print(f"[metrics] BERTScore (fallback) OK: f1={bs['bertscore_f1']:.4f}")
+            except Exception as e2:
+                print(f"[metrics] BERTScore fallback also failed: {type(e2).__name__}: {e2}")
 
     return result
 
