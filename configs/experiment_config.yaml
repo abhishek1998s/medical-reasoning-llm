@@ -97,7 +97,7 @@ logging:
     trackB: trackB-v0-dryrun       # FULL: trackB-v0
 
 hub:
-  username: abhishek1998s          # set automatically from GitHub username; verify HF username matches
+  username: kabhisheks              # HuggingFace username (different from GitHub username abhishek1998s)
   repos:
     trackA: qwen25-1.5b-medreason-trackA-dryrun   # FULL: qwen25-1.5b-medreason-trackA-v0
     trackB: qwen25-1.5b-medreason-trackB-dryrun   # FULL: qwen25-1.5b-medreason-trackB-v0
