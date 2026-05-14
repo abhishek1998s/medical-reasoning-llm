@@ -65,10 +65,6 @@ Large artifacts go under `outputs/`, which is gitignored.
 |   |-- 04_inference_and_metrics.ipynb
 |   |-- 05_llm_judge_and_safety_review.ipynb
 |   `-- 06_report_and_comparison.ipynb
-|-- scripts/
-|   |-- build_notebook_01.py
-|   |-- build_notebook_02.py
-|   `-- build_missing_notebooks.py
 |-- src/
 |   |-- data_formatting.py
 |   |-- inference.py
