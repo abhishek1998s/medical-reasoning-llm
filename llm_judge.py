@@ -25,10 +25,19 @@ Tested with: openai >= 1.50, google-genai >= 0.3, pandas
 """
 
 import argparse
+import logging
 import os
 import json
 import time
+import warnings
 from typing import Optional, List, Dict, Any
+
+# Suppress noisy but harmless warnings from the deep learning stack.
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="pkg_resources")
+for _lg in ("transformers", "datasets", "peft", "urllib3"):
+    logging.getLogger(_lg).setLevel(logging.ERROR)
 
 import pandas as pd
 from openai import OpenAI

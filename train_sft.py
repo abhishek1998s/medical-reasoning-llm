@@ -39,7 +39,25 @@ import argparse
 import functools
 import os
 import json
+import logging
+import warnings
 from pathlib import Path
+
+# Suppress noisy but harmless warnings from the deep learning stack.
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+warnings.filterwarnings("ignore", message=".*max_new_tokens.*")
+warnings.filterwarnings("ignore", message=".*AttentionMaskConverter.*")
+warnings.filterwarnings("ignore", message=".*has new PAD/BOS/EOS tokens.*")
+warnings.filterwarnings("ignore", message=".*Will smartly offload gradients.*")
+warnings.filterwarnings("ignore", message=".*use_cache.*gradient.*checkpointing.*")
+warnings.filterwarnings("ignore", message=".*TypedStorage is deprecated.*")
+warnings.filterwarnings("ignore", message=".*processing_class.*")
+warnings.filterwarnings("ignore", category=FutureWarning, module="transformers")
+warnings.filterwarnings("ignore", category=FutureWarning, module="peft")
+warnings.filterwarnings("ignore", category=FutureWarning, module="trl")
+warnings.filterwarnings("ignore", category=UserWarning,   module="torch")
+for _lg in ("transformers", "datasets", "peft", "accelerate"):
+    logging.getLogger(_lg).setLevel(logging.ERROR)
 
 # Unsloth must be imported BEFORE transformers/trl (it patches them).
 from unsloth import FastLanguageModel, is_bfloat16_supported
