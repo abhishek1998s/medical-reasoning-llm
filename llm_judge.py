@@ -197,7 +197,10 @@ class _OpenAICompatibleJudge:
 
 
 class CerebrasJudge(_OpenAICompatibleJudge):
-    def __init__(self, model="llama3.3-70b"):
+    # gpt-oss-120b: OpenAI's open-source 120B, on Cerebras free tier (production).
+    # Was llama3.3-70b — removed from the free tier in 2026, returns 404.
+    # Different model family from the Qwen student, avoiding judge-family bias.
+    def __init__(self, model="gpt-oss-120b"):
         super().__init__("CEREBRAS_API_KEY",
                          "https://api.cerebras.ai/v1",
                          model, "cerebras")
