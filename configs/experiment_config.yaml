@@ -3,21 +3,23 @@
 # DO NOT change values per-track. Only the formatter ID changes.
 #
 # ============================================================
-# CURRENT MODE: FULL RUN (3000 train / 200 test, ~6 h on Kaggle T4)
+# CURRENT MODE: DRY RUN / SMOKE TEST (~12-15 min on Kaggle T4)
 # ============================================================
-# Dry-run mode validated end-to-end at 100 train / 5 test.  All
-# pipeline fixes confirmed (single-GPU launcher, strict JSON schema,
-# consensus mode without Groq, OVERCONFIDENCE category, BERTScore).
+# Smoke-test values for fast pipeline validation:
+#   100 train / 10 val / 5 test, max_rows=3000, seq=2048,
+#   grad_accum=2, effective batch=4.
+# Hub repos and W&B run names suffixed with -dryrun to keep
+# the full-run artefacts uncontaminated.
 #
-# To switch back to DRY mode swap every value marked  # DRY: ...
-# back to its dry-run value (and reverse the hub/wandb suffix).
+# To switch back to FULL mode, swap every value marked  # FULL: ...
+# back (or just revert this commit).
 # ============================================================
 
 seed: 42
 
 model:
   name: unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit
-  max_seq_length: 4096             # DRY: 2048   (Day 1 measured median content = 1954 tokens)
+  max_seq_length: 2048             # FULL: 4096  (Day 1 measured median content = 1954 tokens)
   load_in_4bit: true
   chat_template: qwen-2.5
 
@@ -25,14 +27,13 @@ dataset:
   name: OpenMed/Medical-Reasoning-SFT-GPT-OSS-120B-V2
   split: train
   shuffle_seed: 42
-  max_rows: null                   # DRY: 10000  — cap rows loaded before shuffle/filter; avoids scanning all 506K.
-                                   # null = scan all 506K rows (the entire dataset) so the 3300 selected
-                                   # samples are drawn uniformly from the full distribution. Trade-off:
-                                   # filter step takes ~25 min on the full dataset vs ~3 min at 50K.
-                                   # Set to 50000 if you want to trade representativeness for speed.
-  num_train: 3000                  # DRY: 100
-  num_val: 100                     # DRY: 10
-  num_test: 200                    # DRY: 5
+  max_rows: 3000                   # FULL: null  — load only 3000 rows for the smoke test.
+                                   # Filter step finishes in <30s on 3000 rows; we then pick 115 of them
+                                   # for train (100) / val (10) / test (5). Bigger pool = better diversity
+                                   # but the smoke test only needs 'does the pipeline run end-to-end?'
+  num_train: 100                   # FULL: 3000
+  num_val: 10                      # FULL: 100
+  num_test: 5                      # FULL: 200
   split_order: shuffle_then_split_then_format
   short_cot_max_tokens: 150
   short_cot_truncate_at: sentence_boundary
@@ -45,15 +46,15 @@ training:
   weight_decay: 0.01
   optim: adamw_8bit
   per_device_train_batch_size: 2
-  gradient_accumulation_steps: 8   # DRY: 2     (dry run keeps batch tiny so we get more steps per epoch)
-  effective_batch_size: 16         # DRY: 4     (= per_device × gradient_accumulation)
+  gradient_accumulation_steps: 2   # FULL: 8    (dry run keeps batch tiny so we get more steps per epoch)
+  effective_batch_size: 4          # FULL: 16   (= per_device × gradient_accumulation)
   gradient_checkpointing: unsloth
   eval_strategy: steps
-  eval_steps: 50                   # DRY: 10    (dry run: ~2-3 evals across the run)
+  eval_steps: 10                   # FULL: 50   (dry run: ~2-3 evals across the run)
   save_strategy: steps
-  save_steps: 50                   # DRY: 25
+  save_steps: 25                   # FULL: 50
   save_total_limit: 2
-  logging_steps: 10                # DRY: 2    (dry run: see progress every 2 steps)
+  logging_steps: 2                 # FULL: 10   (dry run: see progress every 2 steps)
   packing: false
   # Loss mode (single source of truth): we mask user/system tokens via Unsloth's
   # train_on_responses_only after building the SFTTrainer. TRL's native
@@ -107,14 +108,14 @@ logging:
   save_local_json_log: true
   wandb_project: medical-reasoning-sft
   wandb_runs:
-    trackA: trackA-v0              # DRY: trackA-v0-dryrun
-    trackB: trackB-v0              # DRY: trackB-v0-dryrun
+    trackA: trackA-v0-dryrun       # FULL: trackA-v0
+    trackB: trackB-v0-dryrun       # FULL: trackB-v0
 
 hub:
   username: kabhisheks              # HuggingFace username (different from GitHub username abhishek1998s)
   repos:
-    trackA: qwen25-1.5b-medreason-trackA-v0       # DRY: qwen25-1.5b-medreason-trackA-dryrun
-    trackB: qwen25-1.5b-medreason-trackB-v0       # DRY: qwen25-1.5b-medreason-trackB-dryrun
+    trackA: qwen25-1.5b-medreason-trackA-dryrun   # FULL: qwen25-1.5b-medreason-trackA-v0
+    trackB: qwen25-1.5b-medreason-trackB-dryrun   # FULL: qwen25-1.5b-medreason-trackB-v0
 
 judge:
   consensus_mode: true              # true = call every available judge per row and aggregate.
