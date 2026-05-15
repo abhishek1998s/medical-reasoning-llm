@@ -181,6 +181,63 @@ def compute_core_metrics(
     return result
 
 
+# ---------------------------------------------------------------------------
+# Reasoning-aware metric: average reasoning steps (PDF Phase 3, computed
+# programmatically with no LLM judge — mirrors the reference design doc which
+# reported "Avg. Reasoning steps" alongside EM / BERTScore / ROUGE-L).
+# ---------------------------------------------------------------------------
+
+# Captures the text under a "Clinical rationale:" header up to the
+# "Final answer:" header, or to end-of-string for length-truncated outputs.
+_RATIONALE_RE = re.compile(
+    r"Clinical rationale:\s*(?P<rationale>.*?)(?:\n\s*Final answer:|\Z)",
+    re.DOTALL | re.IGNORECASE,
+)
+# A numbered ("1." "2)" "3:") or bulleted ("-", "*", "•") list item at line start.
+_LIST_ITEM_RE = re.compile(r"(?m)^\s*(?:\d+[.):]|[-*•])\s+\S")
+
+
+def count_reasoning_steps(prediction: Any, track: str) -> int:
+    """Count discrete reasoning steps in one Track-A prediction's rationale.
+
+    Track B (answer-only) always returns 0 — there is no rationale block.
+    For Track A: isolate the text under the ``Clinical rationale:`` header
+    (up to ``Final answer:``, or end-of-string for length-truncated outputs),
+    then count explicit numbered/bulleted list items if any are present, else
+    fall back to counting sentences. Non-string / missing input returns 0.
+    """
+    if not str(track).upper().startswith("A"):
+        return 0
+    text = prediction if isinstance(prediction, str) else ""
+    match = _RATIONALE_RE.search(text)
+    if match is None:
+        return 0
+    rationale = match.group("rationale").strip()
+    if not rationale:
+        return 0
+    list_items = _LIST_ITEM_RE.findall(rationale)
+    if list_items:
+        return len(list_items)
+    sentences = [s for s in re.split(r"[.?!]+", rationale) if s.strip()]
+    return len(sentences)
+
+
+def compute_avg_reasoning_steps(
+    predictions: Sequence[Any], track: str
+) -> dict[str, Any]:
+    """Mean reasoning-step count over a list of *raw* predictions.
+
+    Pass the full prediction text, NOT the answer-extracted text — the
+    rationale block is required and ``extract_answer_for_scoring`` strips it.
+    Track B always yields 0 (no rationale). An empty list yields 0.0.
+    """
+    counts = [count_reasoning_steps(p, track) for p in predictions]
+    return {
+        "avg_reasoning_steps": round(mean(counts), 3) if counts else 0.0,
+        "n": len(counts),
+    }
+
+
 def compute_operational_stats(df: Any) -> dict[str, Any]:
     """Compute operational / generation-quality statistics from a predictions CSV.
 

@@ -247,16 +247,23 @@ def run_inference(cfg: dict, repo_dir: Path) -> None:
 def run_metrics(cfg: dict) -> None:
     import pandas as pd
     from src.data_formatting import extract_answer_for_scoring
-    from src.metrics import compute_core_metrics, compute_operational_stats
+    from src.metrics import (compute_core_metrics, compute_operational_stats,
+                             compute_avg_reasoning_steps)
 
     def score_file(path: str, track: str) -> dict:
         df = pd.read_csv(path)
-        preds = [extract_answer_for_scoring(p, track) for p in df["prediction"]]
+        raw_preds = list(df["prediction"])
+        preds = [extract_answer_for_scoring(p, track) for p in raw_preds]
         refs  = list(df["reference"])
         # try_bertscore=True: PDF Phase 3 requires "Semantic Scores" alongside
         # EM; BERTScore is the semantic metric. Silently skipped if bert-score
         # isn't installed (compute_core_metrics catches ImportError).
         core  = compute_core_metrics(preds, refs, try_bertscore=True)
+        # avg_reasoning_steps: PDF Phase 3 reasoning-aware metric, computed on
+        # the RAW prediction (the rationale block; extract_answer_for_scoring
+        # strips it). Track B always yields 0.
+        core["avg_reasoning_steps"] = compute_avg_reasoning_steps(
+            raw_preds, track)["avg_reasoning_steps"]
         core["mean_output_tokens"]     = round(float(df["output_tokens"].mean()), 2)
         core["mean_generation_time_s"] = round(float(df["generation_time_s"].mean()), 3)
         core["mean_tokens_per_sec"]    = round(float(df["tokens_per_sec"].mean()), 2)
