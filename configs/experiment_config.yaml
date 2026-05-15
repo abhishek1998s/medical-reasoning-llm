@@ -101,7 +101,10 @@ inference:
     # too tight a cap for the long tail), Track B averaged 151. Bumping by 2.5-3x:
     trackA: 2048         # was 768 / originally 400
     trackB: 1024         # was 400
-  repetition_penalty: 1.0
+  repetition_penalty: 1.15         # was 1.0; Llama-3.2-3B smoke run produced tautological
+                                   # loops ("X is the X") under greedy decoding with no
+                                   # penalty. 1.15 discourages the loop without hurting
+                                   # fluency. Bump to 1.2 if loops still appear.
   batch_size: 1
   warmup_runs: 3
   log_finish_reason: true
