@@ -289,10 +289,15 @@ def main():
                                     / (args.batch_size * args.grad_accum)))
     warmup_steps = max(1, math.ceil(args.warmup_ratio * total_optim_steps))
     print(f"[train] total_optim_steps={total_optim_steps}  warmup_steps={warmup_steps}")
+    # Eval runs without gradient checkpointing, so at batch_size=2 with
+    # max_seq_length=4096 it OOMs on a T4 (16 GB). Force eval batch to 1.
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
     sft_config = SFTConfig(
         output_dir=args.output_dir,
         run_name=args.run_name,
         per_device_train_batch_size=args.batch_size,
+        per_device_eval_batch_size=1,
         gradient_accumulation_steps=args.grad_accum,
         warmup_steps=warmup_steps,
         num_train_epochs=args.epochs,
