@@ -2,7 +2,7 @@
 train_sft.py — Medical Reasoning Fine-Tuning Pipeline
 =====================================================
 
-Fine-tunes a small instruct model (Qwen2.5-1.5B-Instruct by default) on the
+Fine-tunes a small instruct model (Llama-3.2-3B-Instruct by default) on the
 OpenMed Medical-Reasoning-SFT dataset using Unsloth + QLoRA.
 
 Supports three tracks via --track:
@@ -17,20 +17,25 @@ Output format for Track A (both variants):
     Final answer:
     <answer>
 
-Day 2 — Track B baseline on Kaggle T4:
-    python train_sft.py --track B --num_samples 3000
+Smoke test on Kaggle T4 (~5 min training per track):
+    python train_sft.py --track B --num_samples 100 --max_seq_length 4096
 
-Day 3 — Track A short-CoT on Kaggle T4:
-    python train_sft.py --track A_short --num_samples 3000
+Full run on Kaggle T4 (~110 min training per track):
+    python train_sft.py --track B --num_samples 3000 --max_seq_length 4096
+    python train_sft.py --track A_short --num_samples 3000 --max_seq_length 4096
 
-Day 4 — Final scaled run on A30 / A100:
+Scaled run on A30 / A100 (override defaults):
     python train_sft.py \\
-        --model unsloth/Llama-3.2-3B-Instruct-bnb-4bit \\
+        --model unsloth/Meta-Llama-3.1-8B-Instruct-bnb-4bit \\
         --track A_short \\
         --num_samples 30000 \\
         --max_seq_length 4096 \\
         --batch_size 8 --grad_accum 4 \\
-        --push_to_hub --hub_repo your-username/llama32-3b-medreason-trackA-final
+        --push_to_hub --hub_repo your-username/llama31-8b-medreason-trackA-final
+
+Note: the chat template is auto-picked from the model name
+(qwen-* -> qwen-2.5, llama-3* -> llama-3.1, phi-3 -> phi-3, else chatml).
+Adding a new model family requires extending _RESPONSE_PARTS below.
 
 Tested with: unsloth==2026.4.8, trl==0.24.0, transformers==5.5.0, peft==0.19.1
 """
@@ -135,8 +140,10 @@ def _verify_masking(trainer) -> None:
 def main():
     ap = argparse.ArgumentParser()
     # ---- Model & data ----
-    ap.add_argument("--model", default="unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit",
-                    help="Use the unsloth/*-bnb-4bit variants for QLoRA.")
+    ap.add_argument("--model", default="unsloth/Llama-3.2-3B-Instruct-bnb-4bit",
+                    help="Use the unsloth/*-bnb-4bit variants for QLoRA. "
+                         "Chat template auto-picked from model-name substring "
+                         "(qwen-*, llama-3*, phi-3, else chatml).")
     ap.add_argument("--track", required=True, choices=["A_full", "A_short", "B"])
     ap.add_argument("--dataset", default="OpenMed/Medical-Reasoning-SFT-GPT-OSS-120B-V2")
     ap.add_argument("--num_samples", type=int, default=3000)
@@ -163,7 +170,7 @@ def main():
     ap.add_argument("--run_name", default=None)
     ap.add_argument("--push_to_hub", action="store_true")
     ap.add_argument("--hub_repo", default=None,
-                    help="e.g. abhi/qwen25-1.5b-medreason-trackB-v0")
+                    help="e.g. kabhisheks/llama32-3b-medreason-trackB-v0")
     ap.add_argument("--wandb_project", default="medical-reasoning-sft")
     args = ap.parse_args()
 
