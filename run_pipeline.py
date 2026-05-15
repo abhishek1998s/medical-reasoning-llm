@@ -123,6 +123,7 @@ def train(track: str, cfg: dict, repo_dir: Path, full: bool) -> None:
     # and warmup_ratio so train_sft.py builds an absolute warmup_steps.
     cmd += f" --lora_dropout {cfg['lora']['dropout']}"
     cmd += f" --warmup_ratio {cfg['training']['warmup_ratio']}"
+    cmd += f" --max_grad_norm {cfg['training'].get('max_grad_norm', 1.0)}"
 
     _run(cmd, repo_dir)
 
@@ -195,7 +196,7 @@ def run_inference(cfg: dict, repo_dir: Path) -> None:
         model, tokenizer = load_model(adapter_id)
         device = "cuda" if torch.cuda.is_available() else "cpu"
         rows = []
-        cfg_track_key = "track_A" if track_name == "A" else "track_B"
+        cfg_track_key = "trackA" if track_name == "A" else "trackB"
         max_new = cfg["inference"]["max_new_tokens"][cfg_track_key]
 
         for i, row in enumerate(test_ds):

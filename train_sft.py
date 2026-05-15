@@ -156,6 +156,8 @@ def main():
     ap.add_argument("--save_steps", type=int, default=200)
     ap.add_argument("--logging_steps", type=int, default=10)
     ap.add_argument("--warmup_ratio", type=float, default=0.03)
+    ap.add_argument("--max_grad_norm", type=float, default=1.0,
+                    help="Per-step gradient L2 norm clip (TRL/transformers default).")
     # ---- Outputs ----
     ap.add_argument("--output_dir", default="./output")
     ap.add_argument("--run_name", default=None)
@@ -309,6 +311,7 @@ def main():
         eval_steps=args.eval_steps,
         save_strategy="steps",
         save_steps=args.save_steps,
+        max_grad_norm=args.max_grad_norm,
         save_total_limit=2,
         optim="adamw_8bit",
         weight_decay=0.01,

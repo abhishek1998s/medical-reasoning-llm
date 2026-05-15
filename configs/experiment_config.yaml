@@ -25,7 +25,11 @@ dataset:
   name: OpenMed/Medical-Reasoning-SFT-GPT-OSS-120B-V2
   split: train
   shuffle_seed: 42
-  max_rows: null                   # DRY: 10000  — cap rows loaded before shuffle/filter; avoids scanning all 506K
+  max_rows: null                   # DRY: 10000  — cap rows loaded before shuffle/filter; avoids scanning all 506K.
+                                   # null = scan all 506K rows (the entire dataset) so the 3300 selected
+                                   # samples are drawn uniformly from the full distribution. Trade-off:
+                                   # filter step takes ~25 min on the full dataset vs ~3 min at 50K.
+                                   # Set to 50000 if you want to trade representativeness for speed.
   num_train: 3000                  # DRY: 100
   num_val: 100                     # DRY: 10
   num_test: 200                    # DRY: 5
@@ -51,9 +55,13 @@ training:
   save_total_limit: 2
   logging_steps: 10                # DRY: 2    (dry run: see progress every 2 steps)
   packing: false
-  assistant_only_loss: true        # documents intent; we override to False in SFTConfig
-                                   # (Unsloth's wrapper conflicts with TRL's native path —
-                                   # we use train_on_responses_only instead, see Section 5)
+  # Loss mode (single source of truth): we mask user/system tokens via Unsloth's
+  # train_on_responses_only after building the SFTTrainer. TRL's native
+  # assistant_only_loss=True path conflicts with Unsloth's compiled SFTTrainer
+  # wrapper, so we keep this False and rely on the post-build mask.
+  assistant_only_loss: false
+  train_on_responses_only: true    # documents the active loss-masking choice
+  max_grad_norm: 1.0               # explicit default; clip per-step gradient L2 norm
 
 lora:
   r: 16
@@ -73,12 +81,15 @@ lora:
 inference:
   temperature: 0.0
   do_sample: false
+  # Naming note: trackA / trackB (camelCase) is used here to match
+  # logging.wandb_runs and hub.repos — single naming convention across the
+  # whole config and codebase.
   max_new_tokens:
-    # Full-run measurement: track_A was 82.5% truncated at 768; track_B was 70.5%
+    # Full-run measurement: trackA was 82.5% truncated at 768; trackB was 70.5%
     # truncated at 400. Completed Track A outputs averaged 263 tokens (so 768 was
     # too tight a cap for the long tail), Track B averaged 151. Bumping by 2.5-3x:
-    track_A: 2048         # was 768 / originally 400
-    track_B: 1024         # was 400
+    trackA: 2048         # was 768 / originally 400
+    trackB: 1024         # was 400
   repetition_penalty: 1.0
   batch_size: 1
   warmup_runs: 3
