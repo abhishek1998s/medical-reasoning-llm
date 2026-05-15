@@ -3,16 +3,15 @@
 # DO NOT change values per-track. Only the formatter ID changes.
 #
 # ============================================================
-# CURRENT MODE: DRY RUN / SMOKE TEST (~12-15 min on Kaggle T4)
+# CURRENT MODE: FULL RUN (Llama-3.2-3B, ~9 h on Kaggle T4)
 # ============================================================
-# Smoke-test values for fast pipeline validation:
-#   100 train / 10 val / 5 test, max_rows=3000, seq=4096,
-#   grad_accum=2, effective batch=4.
-# Hub repos and W&B run names suffixed with -dryrun to keep
-# the full-run artefacts uncontaminated.
+# 3000 train / 100 val / 200 test, max_rows=null (full 506K pool),
+# seq=4096, grad_accum=8, effective batch=16, 1 epoch.
+# Two smoke tests validated the pipeline end-to-end: model swap,
+# Llama-3.1 chat template, no truncation, repetition_penalty=1.15
+# fixed the tautology loops.
 #
-# To switch back to FULL mode, swap every value marked  # FULL: ...
-# back (or just revert this commit).
+# To switch back to SMOKE, swap every value marked  # SMOKE: ...
 # ============================================================
 
 seed: 42
@@ -29,7 +28,7 @@ model:
   # silently breaking Track A outputs. 4096 fits both tracks with margin.
   # Llama-3.2 supports up to 131K natively; 4096 is a training/VRAM choice, not
   # a model capability ceiling.
-  max_seq_length: 4096             # FULL: 4096  (same — already the right value)
+  max_seq_length: 4096             # SMOKE: 4096 (same value both modes)
   load_in_4bit: true
   chat_template: llama-3.1         # Llama 3.2 reuses the Llama 3.1 chat template
 
@@ -37,13 +36,12 @@ dataset:
   name: OpenMed/Medical-Reasoning-SFT-GPT-OSS-120B-V2
   split: train
   shuffle_seed: 42
-  max_rows: 3000                   # FULL: null  — load only 3000 rows for the smoke test.
-                                   # Filter step finishes in <30s on 3000 rows; we then pick 115 of them
-                                   # for train (100) / val (10) / test (5). Bigger pool = better diversity
-                                   # but the smoke test only needs 'does the pipeline run end-to-end?'
-  num_train: 100                   # FULL: 3000
-  num_val: 10                      # FULL: 100
-  num_test: 5                      # FULL: 200
+  max_rows: null                   # SMOKE: 3000  — null = scan all 506K rows so the 3300
+                                   # selected samples are drawn uniformly from the full distribution.
+                                   # Filter step ~25 min on the full dataset; affordable in a 12 h budget.
+  num_train: 3000                  # SMOKE: 100
+  num_val: 100                     # SMOKE: 10
+  num_test: 200                    # SMOKE: 5
   split_order: shuffle_then_split_then_format
   short_cot_max_tokens: 150
   short_cot_truncate_at: sentence_boundary
@@ -56,15 +54,15 @@ training:
   weight_decay: 0.01
   optim: adamw_8bit
   per_device_train_batch_size: 2
-  gradient_accumulation_steps: 2   # FULL: 8    (dry run keeps batch tiny so we get more steps per epoch)
-  effective_batch_size: 4          # FULL: 16   (= per_device × gradient_accumulation)
+  gradient_accumulation_steps: 8   # SMOKE: 2   (effective batch 16 for the full run)
+  effective_batch_size: 16         # SMOKE: 4   (= per_device × gradient_accumulation)
   gradient_checkpointing: unsloth
   eval_strategy: steps
-  eval_steps: 10                   # FULL: 50   (dry run: ~2-3 evals across the run)
+  eval_steps: 50                   # SMOKE: 10  (~4 evals across the 188-step run)
   save_strategy: steps
-  save_steps: 25                   # FULL: 50
+  save_steps: 50                   # SMOKE: 25
   save_total_limit: 2
-  logging_steps: 2                 # FULL: 10   (dry run: see progress every 2 steps)
+  logging_steps: 10                # SMOKE: 2   (progress every 10 steps)
   packing: false
   # Loss mode (single source of truth): we mask user/system tokens via Unsloth's
   # train_on_responses_only after building the SFTTrainer. TRL's native
@@ -121,16 +119,16 @@ logging:
   save_local_json_log: true
   wandb_project: medical-reasoning-sft
   wandb_runs:
-    trackA: trackA-v0-dryrun       # FULL: trackA-v0
-    trackB: trackB-v0-dryrun       # FULL: trackB-v0
+    trackA: trackA-v0              # SMOKE: trackA-v0-dryrun
+    trackB: trackB-v0              # SMOKE: trackB-v0-dryrun
 
 hub:
   username: kabhisheks              # HuggingFace username (different from GitHub username abhishek1998s)
   repos:
     # Renamed to llama32-3b after the base-model swap. Old qwen25-1.5b
     # adapters remain on HF Hub as historical artefacts of the previous run.
-    trackA: llama32-3b-medreason-trackA-dryrun   # FULL: llama32-3b-medreason-trackA-v0
-    trackB: llama32-3b-medreason-trackB-dryrun   # FULL: llama32-3b-medreason-trackB-v0
+    trackA: llama32-3b-medreason-trackA-v0       # SMOKE: llama32-3b-medreason-trackA-dryrun
+    trackB: llama32-3b-medreason-trackB-v0       # SMOKE: llama32-3b-medreason-trackB-dryrun
 
 judge:
   consensus_mode: true              # true = call every available judge per row and aggregate.
