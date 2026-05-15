@@ -303,10 +303,13 @@ def run_judge(cfg: dict, repo_dir: Path) -> None:
     judge_cfg = cfg.get("judge", {})
     consensus = judge_cfg.get("consensus_mode", False)
     providers = judge_cfg.get("providers", ["cerebras", "groq", "gemini"])
+    sleep_s = judge_cfg.get("sleep_seconds", 2.0)
     consensus_flag = " --all_judges" if consensus else ""
     judges_flag = " --judges " + ",".join(providers)
+    sleep_flag = f" --sleep {sleep_s}"
     print(f"  judge mode: {'consensus (all judges per row)' if consensus else 'single-judge fallback chain'}")
     print(f"  providers : {providers}")
+    print(f"  sleep_s   : {sleep_s}")
     for track in ("trackA", "trackB"):
         _run(
             f"python llm_judge.py"
@@ -314,7 +317,8 @@ def run_judge(cfg: dict, repo_dir: Path) -> None:
             f" --output      outputs/{track}/judged.csv"
             f" --limit       {limit}"
             f"{judges_flag}"
-            f"{consensus_flag}",
+            f"{consensus_flag}"
+            f"{sleep_flag}",
             repo_dir,
         )
 

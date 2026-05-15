@@ -74,8 +74,11 @@ inference:
   temperature: 0.0
   do_sample: false
   max_new_tokens:
-    track_A: 768          # bumped from 400; dry-run truncation_rate was 40% for Track A
-    track_B: 400
+    # Full-run measurement: track_A was 82.5% truncated at 768; track_B was 70.5%
+    # truncated at 400. Completed Track A outputs averaged 263 tokens (so 768 was
+    # too tight a cap for the long tail), Track B averaged 151. Bumping by 2.5-3x:
+    track_A: 2048         # was 768 / originally 400
+    track_B: 1024         # was 400
   repetition_penalty: 1.0
   batch_size: 1
   warmup_runs: 3
@@ -112,3 +115,6 @@ judge:
   # groq is intentionally omitted: 100K tokens/day free-tier cap is insufficient
   # for 200 rows x 2 tracks x ~2K tok/call = ~800K tokens. Add it back here for
   # dry-run testing (5 rows fits well within Groq's daily budget).
+  sleep_seconds: 2.0                # pace between calls; 30 RPM = 2.0s.
+                                    # Full run had 754 Gemini 429s with sleep=0.3 — bumped to stay under caps.
+                                    # judge_all internally retries with exp backoff on transient 429/503.

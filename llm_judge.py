@@ -214,11 +214,22 @@ def _validate_judgement(data: Dict[str, Any], judge_name: str) -> Dict[str, Any]
     errors = data.get("errors", [])
     if not isinstance(errors, list):
         raise ValueError(f"[{judge_name}] 'errors' must be a list")
+
+    # Drop errors with unknown types entirely rather than letting them inflate
+    # n_errors / n_major_errors while contributing zero to any per-type counter.
+    # Empirically Gemini occasionally invents types like INACCURACY / COMPLETENESS
+    # despite the prompt restricting to 6; this filter keeps aggregation clean.
+    clean_errors = []
+    dropped_types: List[str] = []
     for e in errors:
-        if e.get("type") not in _VALID_ERROR_TYPES:
-            # Don't fail validation for unknown error types — LLMs occasionally
-            # return unexpected values (e.g. "COMPLETENESS"). Log and continue.
-            print(f"    [{judge_name}] skipping unknown error type {e.get('type')!r}")
+        t = e.get("type")
+        if t in _VALID_ERROR_TYPES:
+            clean_errors.append(e)
+        else:
+            dropped_types.append(t)
+    if dropped_types:
+        print(f"    [{judge_name}] dropped {len(dropped_types)} error(s) with unknown types: {dropped_types}")
+    data["errors"] = clean_errors
 
     return data
 
@@ -258,19 +269,36 @@ class _OpenAICompatibleJudge:
         return {"type": "json_object"}
 
     def judge(self, question: str, reference: str, prediction: str) -> Dict[str, Any]:
-        resp = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": JUDGE_SYSTEM},
-                {"role": "user", "content": JUDGE_USER_TEMPLATE.format(
-                    question=question, reference=reference, prediction=prediction)},
-            ],
-            temperature=0.0,
-            max_tokens=800,
-            response_format=self._response_format(),
+        last_parse_err: Optional[Exception] = None
+        # Retry once on JSONDecodeError: even with strict constrained decoding,
+        # we observed ~5 Cerebras responses come back as malformed JSON during
+        # the full run (likely unicode chars in medical text confusing the
+        # decoder). Network/rate errors are NOT retried here — that's
+        # judge_all / judge_with_fallback's job.
+        for parse_attempt in range(2):
+            resp = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": JUDGE_SYSTEM},
+                    {"role": "user", "content": JUDGE_USER_TEMPLATE.format(
+                        question=question, reference=reference, prediction=prediction)},
+                ],
+                temperature=0.0,
+                max_tokens=800,
+                response_format=self._response_format(),
+            )
+            content = resp.choices[0].message.content
+            try:
+                raw = json.loads(content)
+                return _validate_judgement(raw, self.name)
+            except json.JSONDecodeError as e:
+                last_parse_err = e
+                if parse_attempt == 0:
+                    print(f"    [{self.name}] JSON parse error (attempt 1/2), retrying: {e}")
+                    continue
+        raise ValueError(
+            f"[{self.name}] JSON parse failed after 2 attempts: {last_parse_err}"
         )
-        raw = json.loads(resp.choices[0].message.content)
-        return _validate_judgement(raw, self.name)
 
 
 class CerebrasJudge(_OpenAICompatibleJudge):
@@ -366,16 +394,41 @@ class JudgeRouter:
                         time.sleep(1)
         return None
 
-    def judge_all(self, q, r, p) -> List[Dict[str, Any]]:
-        """Get judgement from every available judge (consensus mode)."""
+    def judge_all(self, q, r, p, max_retries: int = 3) -> List[Dict[str, Any]]:
+        """Get judgement from every available judge (consensus mode).
+
+        Each judge is retried with exponential backoff on rate-limit / 503
+        transients (full-run measurement showed 754 Gemini 429s and 50+
+        Cerebras hourly-cap 429s — without retry every one of those skipped
+        the judge for that row, collapsing consensus to 0-1 judges).
+        Schema errors are NOT retried (different judge entirely).
+        """
         out = []
         for j in self.judges:
-            try:
-                out.append({"judge": j.name, **j.judge(q, r, p)})
-            except ValueError as e:
-                print(f"    [{j.name}] schema error (skipped): {e}")
-            except Exception as e:
-                print(f"    [{j.name}] {str(e)[:120]}")
+            for attempt in range(max_retries):
+                try:
+                    out.append({"judge": j.name, **j.judge(q, r, p)})
+                    break
+                except ValueError as e:
+                    # Schema validation failed -- log and move on to the next judge
+                    print(f"    [{j.name}] schema error (skipped): {e}")
+                    break
+                except Exception as e:
+                    msg = str(e).lower()
+                    transient = any(k in msg for k in
+                                    ("rate", "429", "quota", "limit", "503",
+                                     "unavailable", "resource_exhausted"))
+                    if transient and attempt < max_retries - 1:
+                        wait = 2 ** attempt
+                        print(f"    [{j.name}] transient ({str(e)[:60]}), sleeping {wait}s (attempt {attempt+1}/{max_retries})")
+                        time.sleep(wait)
+                    elif attempt == max_retries - 1:
+                        print(f"    [{j.name}] failed after {max_retries} attempts: {str(e)[:120]}")
+                        break
+                    else:
+                        # Non-transient error — fail fast
+                        print(f"    [{j.name}] error: {str(e)[:120]}")
+                        break
         return out
 
 
@@ -434,8 +487,11 @@ def main():
     ap.add_argument("--all_judges", action="store_true",
                     help="Use ALL available judges per sample (consensus mode, better for final report)")
     ap.add_argument("--limit", type=int, default=None)
-    ap.add_argument("--sleep", type=float, default=0.3,
-                    help="Seconds between calls (respect 30 RPM = 2.0 if needed)")
+    # default 2.0s: stays under all free-tier RPM caps (Cerebras/Groq 30 RPM,
+    # Gemini Flash 15 RPM). The previous 0.3s default was the root cause of the
+    # full-run quota exhaustion (754 Gemini 429s, ~50 Cerebras hourly-cap 429s).
+    ap.add_argument("--sleep", type=float, default=2.0,
+                    help="Seconds between calls (free-tier safe = 2.0; bump higher if still rate-limited)")
     ap.add_argument("--save_every", type=int, default=10)
     args = ap.parse_args()
 
