@@ -558,7 +558,14 @@ def run_report() -> None:
 # Main
 # ============================================================
 
-ALL_STAGES = ["train_b", "train_a", "infer", "metrics", "judge", "audit", "report"]
+# Default pipeline stages. `judge` is intentionally OMITTED — see Phase 3
+# of the design doc and the comment block on cell `code-judge` in the
+# notebook for the rationale (assignment doesn't require it; EM + ROUGE-L
+# + BERTScore + manual audit cover Phase 3). To re-enable judge in a run,
+# pass `--stages train_b,train_a,infer,metrics,judge,audit,report`
+# explicitly.
+ALL_STAGES = ["train_b", "train_a", "infer", "metrics", "audit", "report"]
+OPTIONAL_STAGES = ["judge"]                      # kept available, not run by default
 
 
 def main() -> None:
@@ -577,9 +584,10 @@ def main() -> None:
     args = ap.parse_args()
 
     stages = [s.strip() for s in args.stages.split(",") if s.strip()]
-    bad = [s for s in stages if s not in ALL_STAGES]
+    valid_stages = set(ALL_STAGES) | set(OPTIONAL_STAGES)
+    bad = [s for s in stages if s not in valid_stages]
     if bad:
-        ap.error(f"Unknown stages: {bad}. Valid: {ALL_STAGES}")
+        ap.error(f"Unknown stages: {bad}. Valid (default+optional): {sorted(valid_stages)}")
 
     repo_dir = Path(__file__).parent.resolve()
     if str(repo_dir) not in sys.path:
