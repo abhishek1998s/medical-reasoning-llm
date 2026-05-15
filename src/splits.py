@@ -20,7 +20,8 @@ def _row_total_tokens(row: dict, tokenizer, cot_budget: int | None = None) -> in
     """Approximate total tokens needed if we trained on this row.
 
     Counts user content + assistant content + assistant reasoning. Does
-    NOT add chat-template overhead (~30 tokens for Qwen2.5 — small).
+    NOT add chat-template overhead (~30 tokens for Qwen-2.5 or Llama-3
+    chat templates — small constant regardless of model family).
 
     Parameters
     ----------

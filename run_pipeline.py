@@ -147,7 +147,10 @@ def run_inference(cfg: dict, repo_dir: Path) -> None:
     hf_token = os.environ.get("HF_TOKEN") or None
 
     from transformers import AutoTokenizer
-    tok = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-1.5B-Instruct", token=hf_token)
+    # Tokenizer MUST match the model — Llama and Qwen produce different token
+    # counts for the same text (Llama tokenizer ~20-30% more tokens), and our
+    # length filter uses this tokenizer to decide which rows fit max_seq_length.
+    tok = AutoTokenizer.from_pretrained(cfg["model"]["name"], token=hf_token)
 
     ds = load_dataset(cfg["dataset"]["name"], split=cfg["dataset"]["split"],
                       token=hf_token)
